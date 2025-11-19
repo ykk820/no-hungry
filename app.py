@@ -129,7 +129,7 @@ def view_student():
 
     with st.sidebar:
         # 這裡修改了：沒有預設值，placeholder 只是提示
-        email = st.text_input("輸入 Gmail 登入", placeholder="例如: ykk@gmail.com")
+        email = st.text_input("輸入 Gmail 登入", placeholder="例如: 123@gmail.com")
         
         if email:
             if email not in st.session_state.users:
