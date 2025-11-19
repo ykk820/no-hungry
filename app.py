@@ -5,17 +5,18 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import urllib.parse
 import time
-import base64 # 為了處理 Google Map 導航按鈕的舊版問題 (雖然這次不用，但留著備用)
 
 # ==========================================
-# 1. 系統全域設定 (不變)
+# 1. 系統全域設定 (已更新新網址)
 # ==========================================
-GAS_URL = "https://script.google.com/macros/s/AKfycbwZsrOvS7QrNTaXVcJo1L7HZpmcUSvjZg6JPOPjPbW5-9EYzRUzVYxVs0K--Tp93DxhKQ/exec"
+# 🔴 更新後的 GAS 網址 🔴
+GAS_URL = "https://script.google.com/macros/s/AKfycbz0ltqrGDA1nwXoqchQ-bTHNIW5jDt5OesfcWs6NNLgb-H2p6t6sM3ikxQZVr11arHtyg/exec"
+
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app" 
 
 # ==========================================
-# 2. 資料庫連線函式 (不變)
+# 2. 資料庫連線函式
 # ==========================================
 def get_client():
     try:
@@ -28,7 +29,6 @@ def get_client():
 
 @st.cache_data(ttl=10)
 def load_data():
-    """讀取店家設定(含地區/模式) & 領取紀錄"""
     client = get_client()
     if not client: return {}, []
     
@@ -72,6 +72,17 @@ def delete_order(idx):
         except: return False
     return False
 
+def add_shop_to_backend(data):
+    """將新店家資料透過 GAS 寫入 Google Sheet (讓 GAS 處理地址轉座標)"""
+    data['action'] = 'add_shop' # 關鍵：設定動作為新增店家
+    try:
+        response = requests.post(GAS_URL, json=data)
+        if response.status_code == 200:
+            return response.json()
+        return {"result": "error", "message": f"連線失敗 (HTTP {response.status_code})"}
+    except Exception as e:
+        return {"result": "error", "message": f"網路錯誤: {str(e)}"}
+
 # ==========================================
 # 3. 頁面開始
 # ==========================================
@@ -98,20 +109,17 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
 
     st.title(f"📊 實時銷售看板 - {shop_target}")
     
-    if st.button("🔄 刷新最新訂單"):
+    if st.button("🔄 刷新數據"):
         st.cache_data.clear()
         st.rerun()
 
-    # 計算數據
     shop_orders = pd.DataFrame()
     sold_or_queued = 0
     if not ORDERS_DF.empty:
         shop_orders = ORDERS_DF[ORDERS_DF.apply(lambda row: shop_target in str(row.values), axis=1)]
         sold_or_queued = len(shop_orders)
     
-    # 根據模式顯示不同的儀表板
     c1, c2, c3 = st.columns(3)
-    
     if is_queue_mode:
         c1.metric("👥 總叫號人數", sold_or_queued)
         c2.metric("📋 目前隊伍長度", sold_or_queued)
@@ -122,7 +130,6 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
         c1.metric("📦 總庫存", shop_info['stock'])
         c2.metric("✅ 已售出", sold_or_queued)
         c3.metric("🔥 剩餘", remain, delta_color="inverse")
-        st.metric("💰 預估營收", f"${rev}") # 獨立顯示
     
     st.divider()
     st.subheader("📋 待處理名單")
@@ -132,10 +139,10 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
         st.dataframe(shop_orders[['號碼牌', '時間', 'user', 'item']], use_container_width=True)
     else:
         st.info("目前無待處理訂單")
-        
+
 # --- 消費者 + 管理員模式 (B) ---
 else:
-    # --- 側邊欄：管理員 (新增座標工具) ---
+    # --- 側邊欄：管理員 (新增店家表單) ---
     with st.sidebar:
         st.header("🔒 管理員")
         password = st.text_input("密碼", type="password")
@@ -145,19 +152,48 @@ else:
             st.success("已登入")
             st.divider()
             
-            # 📌 座標查找工具 (解決手動輸入問題)
-            st.subheader("🛠️ 座標查找工具")
-            search_term = st.text_input("輸入店家名稱/地址")
-            if search_term:
-                # 使用 Google Maps 搜尋 API 產生連結
-                maps_search_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(search_term)}"
-                st.markdown(f"**1.** [點擊這裡開啟 Google 地圖]({maps_search_url})", unsafe_allow_html=True)
-                st.caption("2. 在 Google 地圖上點擊地點，從網址列或彈出視窗複製「經緯度」回 Google Sheet。")
-                st.info("💡 座標格式範例：25.1750, 121.4450")
-            
+            # 🚀 🆕 一鍵新增店家表單
+            st.subheader("➕ 一鍵新增店家 (自動定位)")
+            with st.form("add_shop_form"):
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    new_shop_name = st.text_input("店名*", key="new_shop_name")
+                    new_item = st.text_input("商品名*", key="new_item", value="剩食套餐")
+                    new_price = st.number_input("價格*", min_value=1, value=50)
+                with col_b:
+                    new_address = st.text_input("完整地址*", key="new_address", help="範例：新北市淡水區英專路15號")
+                    new_region = st.text_input("區域*", key="new_region", value="淡江大學")
+                    new_stock = st.number_input("初始庫存", min_value=1, value=10)
+                
+                new_mode = st.radio("營運模式", ['剩食', '排隊'], horizontal=True)
+                
+                submitted = st.form_submit_button("✅ 新增並定位")
+                
+                if submitted:
+                    if not all([new_shop_name, new_address]):
+                        st.error("店名和地址不可為空！")
+                    else:
+                        result = add_shop_to_backend({
+                            "shop_name": new_shop_name,
+                            "address": new_address,
+                            "region": new_region,
+                            "item": new_item,
+                            "price": new_price,
+                            "stock": new_stock,
+                            "mode": new_mode
+                        })
+                        if result['result'] == 'success':
+                            st.success(result['message'])
+                            st.balloons()
+                            st.cache_data.clear() # 清除快取，讓新店馬上顯示
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(f"新增失敗: {result['message']}")
+
+
             st.divider()
-            
-            # 🚀 快速進入商家後台
+            # 🚀 快速進入商家後台 (保留)
             st.subheader("🚀 快速進入商家後台")
             target_shop_admin = st.selectbox("選擇要管理的店家", list(SHOPS_DB.keys()))
             if st.button("進入該店後台"):
@@ -165,8 +201,13 @@ else:
                 st.query_params["name"] = target_shop_admin
                 st.rerun()
             
-            # ... (QR Code 功能省略，因為使用者知道怎麼產生) ...
-            
+            # 產生 QR Code (保留)
+            st.subheader("📱 產生 QR Code")
+            qr_shop = st.selectbox("選擇店家 (QR Code)", list(SHOPS_DB.keys()))
+            shop_link = f"{BASE_APP_URL}/?mode=shop&name={urllib.parse.quote(qr_shop)}"
+            st.image(f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}")
+            st.code(shop_link)
+
             if st.button("清除快取"):
                 st.cache_data.clear()
                 st.rerun()
@@ -178,17 +219,16 @@ else:
         st.warning("⚠️ 無法讀取店家資料，請檢查 Google Sheet 設定。")
         st.stop()
 
-    # 1. 區域篩選功能
+    # 區域篩選功能
     all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
     selected_region = st.selectbox("📍 請選擇區域", ["所有區域"] + all_regions)
     
-    # 篩選店家
     if selected_region == "所有區域":
         filtered_shops = SHOPS_DB
     else:
         filtered_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == selected_region}
 
-    # 2. 地圖顯示
+    # 地圖顯示
     if filtered_shops:
         map_df = pd.DataFrame([
             {'shop_name': k, 'lat': v['lat'], 'lon': v['lon']} for k, v in filtered_shops.items()
@@ -208,7 +248,6 @@ else:
         info = filtered_shops[target]
         is_queue_mode = info.get('mode') == '排隊' 
         
-        # 計算排隊人數與庫存
         queue_count = 0
         if not ORDERS_DF.empty:
             shop_orders = ORDERS_DF[ORDERS_DF.apply(lambda x: target in str(x.values), axis=1)]
@@ -230,11 +269,9 @@ else:
             
         st.markdown(status_text)
         
-        # 導航按鈕
         gmap_url = f"https://www.google.com/maps/search/?api=1&query={info['lat']},{info['lon']}"
         st.link_button("🚗 開啟 Google Map 導航前往", gmap_url)
         
-        # 下單表單
         u_name = st.text_input("輸入您的暱稱 (作為取餐/叫號依據)")
         
         if is_queue_mode:
@@ -249,8 +286,8 @@ else:
                 with st.spinner("連線中..."):
                     try:
                         full_item = f"{target} - {info['item']}"
-                        requests.post(GAS_URL, json={'user': u_name, 'item': full_item})
-                        st.success(f"成功！您的排隊號碼是 {queue_count + 1} 號。")
+                        requests.post(GAS_URL, json={'action': 'order', 'user': u_name, 'item': full_item})
+                        st.success(f"成功！")
                         st.cache_data.clear()
                         time.sleep(1)
                         st.rerun()
@@ -262,6 +299,11 @@ else:
         
         if not ORDERS_DF.empty:
             display_df = ORDERS_DF[ORDERS_DF.apply(lambda x: target in str(x.values), axis=1)].copy()
+            
+            if display_df.empty and len(ALL_ORDERS) > 0:
+                st.caption("全區訂單總覽")
+                st.dataframe(ORDERS_DF.tail(10))
+
             if not display_df.empty:
                 display_df['號碼牌'] = range(1, len(display_df) + 1)
                 
