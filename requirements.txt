@@ -1,5 +1,5 @@
 streamlit
-streamlit_js_eval
 gspread
 google-auth
 oauth2client
+requests
