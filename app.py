@@ -10,7 +10,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 GAS_URL = "https://script.google.com/macros/s/AKfycbzDc3IWg8zOPfqlxm-T2zLvr7aEH3scjpr68hF878wLBNl_E8UuCeAqMPPCM75gMwf5kA/exec" 
 
 # 請填入 Google Sheet 的分頁名稱
-SHEET_NAME = "領取紀錄"
+SHEET_NAME = =1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw
 
 # ==========================================
 # 功能函式
