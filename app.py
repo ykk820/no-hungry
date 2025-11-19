@@ -1,87 +1,81 @@
 import streamlit as st
 import requests
-import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ==========================================
-# 1. 設定區 (你的 GAS 網址)
+# 設定區
 # ==========================================
-GAS_URL = "https://script.google.com/macros/s/AKfycbwBSR9AjURmytbz9MTRYw3rlfzY1TMs_Uni1yQ5tDxExVHiEih8X4EI8SbYCmIb8GV1yQ/exec"
+# 請填入第一階段拿到的 GAS 網址
+GAS_URL = "https://script.google.com/macros/s/AKfycbzDc3IWg8zOPfqlxm-T2zLvr7aEH3scjpr68hF878wLBNl_E8UuCeAqMPPCM75gMwf5kA/exec" 
+
+# 請填入 Google Sheet 的分頁名稱
+SHEET_NAME = "領取紀錄"
 
 # ==========================================
-# 2. 讀取 Google Sheet 資料 (容錯版)
-#    如果金鑰沒設好，這裡會跳過，不會讓整個網頁掛掉
+# 功能函式
 # ==========================================
-def get_google_sheet_data():
+def get_data():
+    """從 Google Sheet 讀取領取名單"""
     try:
-        # 嘗試從 Streamlit Secrets 拿金鑰
         if "gcp_service_account" not in st.secrets:
-            return None # 沒有設定金鑰，直接回傳空
+            return None
             
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         
-        # 開啟第一張試算表
-        sheet = client.openall()[0].get_worksheet(0) 
+        # 抓取第一張報表中的指定分頁
+        sheet = client.openall()[0].worksheet(SHEET_NAME)
         return sheet.get_all_records()
     except Exception as e:
-        print(f"讀取失敗: {e}")
-        return None
+        return []
 
 # ==========================================
-# 3. 網頁介面 (UI)
+# 網頁介面
 # ==========================================
-st.title("🍱 餓不死地圖 (搶購測試)")
+st.set_page_config(page_title="餓不死地圖", page_icon="🍱")
 
-# 輸入名字
-name = st.text_input("請輸入你的名字", placeholder="例如: Ykk")
+st.title("🍱 餓不死地圖")
+st.markdown("幫助有需要的人，共享資源。")
 
-# --------------------------------
-# 搶購按鈕區塊
-# --------------------------------
-if st.button("🚀 立即搶購", use_container_width=True):
-    if not name:
-        st.error("❌ 請先輸入名字！")
-    else:
-        with st.spinner("連線處理中..."):
-            try:
-                # 準備資料
-                payload = {'user': name, 'item': '愛心便當'}
-                
-                # 發送請求給 Google Apps Script
-                response = requests.post(GAS_URL, json=payload)
-                
-                # 判斷結果
-                if response.status_code == 200:
-                    result = response.json()
+# --- 領取區塊 ---
+with st.container():
+    st.subheader("我要領取")
+    name = st.text_input("您的稱呼", placeholder="請輸入姓名")
+    
+    # 按鈕
+    if st.button("確認領取", type="primary", use_container_width=True):
+        if not name:
+            st.warning("請輸入稱呼才能領取喔！")
+        else:
+            with st.spinner("系統處理中..."):
+                try:
+                    payload = {'user': name, 'item': '待用餐一份'}
+                    response = requests.post(GAS_URL, json=payload)
                     
-                    if result.get("result") == "success":
-                        st.balloons() # 成功撒花
-                        st.success(f"✅ {result.get('message')}")
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get("result") == "success":
+                            st.balloons()
+                            st.success(f"✅ {result.get('message')}")
+                        else:
+                            st.error(f"⚠️ {result.get('message')}")
                     else:
-                        st.error(f"⚠️ {result.get('message')}")
-                else:
-                    st.error(f"連線失敗 (狀態碼: {response.status_code})")
-            
-            except Exception as e:
-                st.error(f"程式發生錯誤: {str(e)}")
+                        st.error("連線異常，請稍後再試。")
+                except Exception as e:
+                    st.error("發生未知錯誤，請聯繫管理員。")
 
-# --------------------------------
-# 顯示名單區塊
-# --------------------------------
 st.divider()
-st.subheader("📋 目前搶購名單")
 
-if st.button("🔄 刷新名單"):
+# --- 即時名單區塊 ---
+st.subheader("📋 今日領取狀況")
+if st.button("刷新名單"):
     st.rerun()
 
-# 讀取資料
-df = get_google_sheet_data()
-
-if df:
-    st.dataframe(df, use_container_width=True)
+data = get_data()
+if data:
+    st.dataframe(data, use_container_width=True)
 else:
-    st.info("目前無法讀取名單 (可能是還沒設定 Secrets 金鑰)，但上面的「搶購功能」依然可以用喔！")
+    st.info("目前尚無領取紀錄，或系統正在同步中。")
