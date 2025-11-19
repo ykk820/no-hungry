@@ -50,4 +50,6 @@ if st.button("🚀 立即搶購", use_container_width=True):
                 response = requests.post(GAS_URL, json=payload)
                 
                 # 解析回傳結果
-                if response.status_code
+             # 解析回傳結果
+                if response.status_code == 200:
+                    result = response.json() # 解析 JSON
