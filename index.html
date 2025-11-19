@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>限時搶購系統</title>
+  <style>
+    body { font-family: "Microsoft JhengHei", sans-serif; background: #f4f4f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+    .card { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); width: 100%; max-width: 400px; text-align: center; }
+    .hidden { display: none; }
+    input { width: 100%; padding: 12px; margin: 10px 0; box-sizing: border-box; border: 1px solid #ccc; border-radius: 5px; }
+    button { width: 100%; padding: 12px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; font-weight: bold; margin-top: 10px; }
+    .btn-login { background: #333; color: white; }
+    .btn-grab { background: #d32f2f; color: white; font-size: 18px; }
+    .btn-grab:disabled { background: #ccc; }
+    .btn-reset { background: #e0e0e0; color: #333; margin-top: 20px; font-size: 14px; }
+    #msg { margin-top: 15px; font-weight: bold; min-height: 20px; }
+    .error { color: red; } .success { color: green; }
+  </style>
+</head>
+<body>
+
+  <div id="login-area" class="card">
+    <h2>🔒 系統鎖定</h2>
+    <p>請輸入管理員密碼</p>
+    <input type="password" id="passInput" placeholder="Password">
+    <button class="btn-login" onclick="checkPass()">進入系統</button>
+    <p id="login-msg" class="error"></p>
+  </div>
+
+  <div id="app-area" class="card hidden">
+    <h2>🚀 限時搶購測試</h2>
+    <input type="text" id="username" placeholder="請輸入測試者名稱 (例: Ykk)">
+    <button id="grabBtn" class="btn-grab" onclick="sendData()">立即搶購</button>
+    <div id="msg"></div>
+    
+    <hr style="margin: 20px 0; border: 0; border-top: 1px solid #eee;">
+    <button class="btn-reset" onclick="resetTest()">🔄 清除重填 (換人測試)</button>
+  </div>
+
+<script>
+  // ==========================================
+  // 🔴 請把剛剛的網址貼在引號裡面 🔴
+  // ==========================================
+  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwBSR9AjURmytbz9MTRYw3rlfzY1TMs_Uni1yQ5tDxExVHiEih8X4EI8SbYCmIb8GV1yQ/exec";
+
+  function checkPass() {
+    if (document.getElementById("passInput").value === "ykk8880820") {
+      document.getElementById("login-area").classList.add("hidden");
+      document.getElementById("app-area").classList.remove("hidden");
+    } else {
+      document.getElementById("login-msg").innerText = "密碼錯誤";
+    }
+  }
+
+  function sendData() {
+    var user = document.getElementById("username").value;
+    var btn = document.getElementById("grabBtn");
+    var msg = document.getElementById("msg");
+
+    if (!user) { alert("請輸入名字"); return; }
+
+    btn.disabled = true; 
+    btn.innerText = "處理中...";
+    msg.innerText = "";
+
+    fetch(SCRIPT_URL, {
+      method: "POST",
+      body: JSON.stringify({ user: user, item: "限量商品" })
+    })
+    .then(r => r.json())
+    .then(data => {
+      msg.innerText = data.message;
+      msg.className = (data.result === "success") ? "success" : "error";
+      alert(data.message);
+    })
+    .catch(e => { msg.innerText = "連線失敗"; console.error(e); })
+    .finally(() => {
+      btn.disabled = false;
+      btn.innerText = "立即搶購";
+    });
+  }
+
+  function resetTest() {
+    document.getElementById("username").value = "";
+    document.getElementById("msg").innerText = "";
+  }
+</script>
+</body>
+</html>
