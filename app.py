@@ -234,8 +234,7 @@ else:
     if selected_region == "所有區域":
         filtered_shops = SHOPS_DB
     else:
-        filtered_shops = {k: v for k: v in SHOPS_DB.items() if v['region'] == selected_region}
-
+       filtered_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == selected_region}
     # 地圖顯示
     map_df = pd.DataFrame([
         {'shop_name': k, 'lat': v['lat'], 'lon': v['lon']} for k, v in filtered_shops.items()
