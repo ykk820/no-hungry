@@ -6,239 +6,234 @@ import pandas as pd
 import urllib.parse
 
 # ==========================================
-# 1. 設定區 (已代入你的資料)
+# 1. 設定區
 # ==========================================
-# 你的 Google Apps Script 網址 (寫入資料用)
+# 你的 GAS 網址
 GAS_URL = "https://script.google.com/macros/s/AKfycbzDc3IWg8zOPfqlxm-T2zLvr7aEH3scjpr68hF878wLBNl_E8UuCeAqMPPCM75gMwf5kA/exec"
 
-# 你的 Google Sheet ID (讀取/刪除資料用)
+# 你的 Google Sheet ID (不變)
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
-SHEET_NAME = "領取紀錄" # 請確認你的分頁名稱是這個
 
-# 模擬店家資料庫 (未來可改成從 Sheet 讀取)
-SHOPS_DB = {
-    '7-11 公園店': {'lat': 25.0330, 'lon': 121.5654, 'item': '御飯糰', 'price': 15, 'stock': 10},
-    '全家 復興店': {'lat': 25.0400, 'lon': 121.5500, 'item': '友善食光麵包', 'price': 25, 'stock': 8},
-    '路易莎 大安店': {'lat': 25.0350, 'lon': 121.5400, 'item': '當日甜點', 'price': 40, 'stock': 5},
-    '健康餐盒': {'lat': 25.0380, 'lon': 121.5600, 'item': '水煮嫩雞便當', 'price': 60, 'stock': 15},
-}
-
-# 轉成 DataFrame 給地圖顯示用
-MAP_DATA = pd.DataFrame([
-    {'shop_name': k, 'lat': v['lat'], 'lon': v['lon']} for k, v in SHOPS_DB.items()
-])
+# 你的 APP 網址 (請在這裡填入你發布後的真正網址，這樣 QR Code 才會對)
+# 例如: https://no-hungry.streamlit.app
+BASE_APP_URL = "https://no-hungry.streamlit.app" 
 
 # ==========================================
-# 2. 後端連線與功能函式
+# 2. 連線 Google Sheet
 # ==========================================
-def get_sheet_object():
-    """取得 Google Sheet 物件"""
+def get_client():
     try:
         if "gcp_service_account" not in st.secrets:
             return None
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        
-        # 使用你提供的 ID 精準開啟表格
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        return sheet
-    except Exception as e:
-        # 如果找不到分頁或連線失敗，回傳 None
-        print(f"連線錯誤: {e}")
+        return gspread.authorize(creds)
+    except Exception:
         return None
 
-def get_data():
-    """讀取所有訂單資料"""
-    sheet = get_sheet_object()
-    return sheet.get_all_records() if sheet else []
+@st.cache_data(ttl=60) # 設定快取 60 秒，避免一直讀取變慢
+def load_shops_from_sheet():
+    """從 Google Sheet '店家設定' 分頁讀取店家資料"""
+    client = get_client()
+    if not client: return {}
+    
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
+        data = sheet.get_all_records()
+        
+        shops_db = {}
+        for row in data:
+            # 確保欄位名稱對應 (Google Sheet 的標題)
+            name = str(row.get('店名', '')).strip()
+            if name:
+                shops_db[name] = {
+                    'lat': float(row.get('緯度', 0)),
+                    'lon': float(row.get('經度', 0)),
+                    'item': str(row.get('商品', '優惠商品')),
+                    'price': int(row.get('價格', 0)),
+                    'stock': int(row.get('初始庫存', 0))
+                }
+        return shops_db
+    except Exception as e:
+        st.error(f"讀取店家設定失敗: {e}")
+        return {}
+
+def get_orders():
+    """讀取 '領取紀錄'"""
+    client = get_client()
+    if not client: return []
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet("領取紀錄")
+        return sheet.get_all_records()
+    except:
+        return []
 
 def delete_order(row_index):
-    """刪除指定訂單 (管理員用)"""
-    sheet = get_sheet_object()
-    if sheet:
-        # Sheet 列數 = DataFrame index + 2 (標題佔1行, 從1開始算)
+    """刪除訂單"""
+    client = get_client()
+    if client:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet("領取紀錄")
         sheet.delete_rows(row_index + 2)
         return True
     return False
 
 # ==========================================
-# 3. 頁面路由 (判斷現在是誰)
+# 3. 主程式邏輯
 # ==========================================
 st.set_page_config(page_title="餓不死地圖", page_icon="🍱", layout="wide")
 
-# 取得網址參數 (?mode=shop&name=xxx)
+# 讀取店家資料 (現在是動態的了！)
+SHOPS_DB = load_shops_from_sheet()
+
+if not SHOPS_DB:
+    st.error("⚠️ 無法讀取店家資料，請確認 Google Sheet 有 '店家設定' 分頁且已填寫。")
+    st.stop()
+
+# 準備地圖資料
+MAP_DATA = pd.DataFrame([
+    {'shop_name': k, 'lat': v['lat'], 'lon': v['lon']} for k, v in SHOPS_DB.items()
+])
+
+# 處理網址參數
 params = st.query_params
 current_mode = params.get("mode", "consumer") 
 shop_target = params.get("name", None)
 
-# ==========================================
-# 🔵 模式 A: 商家後台模式 (掃 QR Code 進入)
-# ==========================================
+# ------------------------------------------
+# 🔵 模式 A: 商家後台 (掃碼進入)
+# ------------------------------------------
 if current_mode == "shop" and shop_target in SHOPS_DB:
-    st.title(f"🏪 商家後台：{shop_target}")
-    st.caption("📊 此頁面顯示您的銷售狀況與庫存")
+    st.title(f"🏪 {shop_target} - 商家後台")
     
-    if st.button("🔄 刷新數據", use_container_width=True):
+    if st.button("🔄 刷新數據"):
         st.cache_data.clear()
         st.rerun()
     
-    # 1. 計算數據
-    all_orders = get_data()
+    # 計算庫存
+    all_orders = get_orders()
     df = pd.DataFrame(all_orders)
     
-    # 篩選出這家店的訂單 (比對 item 名稱)
+    sold_count = 0
+    shop_orders = pd.DataFrame()
+    
     if not df.empty:
-        # 確保欄位名稱統一 (轉成字串比對)
+        # 篩選出該店家的訂單
         shop_orders = df[df.apply(lambda row: shop_target in str(row.values), axis=1)]
         sold_count = len(shop_orders)
-    else:
-        shop_orders = pd.DataFrame()
-        sold_count = 0
         
-    initial_stock = SHOPS_DB[shop_target]['stock']
+    shop_info = SHOPS_DB[shop_target]
+    initial_stock = shop_info['stock']
     remaining_stock = initial_stock - sold_count
     
-    # 2. 儀表板
-    col1, col2, col3 = st.columns(3)
-    col1.metric("📦 初始庫存", initial_stock)
-    col2.metric("💰 已售出", sold_count)
-    col3.metric("🔥 剩餘庫存", remaining_stock, delta_color="inverse")
+    # 儀表板
+    c1, c2, c3 = st.columns(3)
+    c1.metric("📦 設定庫存", initial_stock)
+    c2.metric("💰 已售出", sold_count)
+    c3.metric("🔥 剩餘數量", remaining_stock, delta_color="inverse")
     
     st.divider()
-    
-    # 3. 訂單明細
-    st.subheader("📋 您的訂單明細")
+    st.subheader("📋 訂單列表")
     if not shop_orders.empty:
         st.dataframe(shop_orders, use_container_width=True)
     else:
-        st.info("目前尚未有訂單")
+        st.info("尚無訂單")
 
-    # 離開
-    if st.button("⬅️ 回首頁"):
+    if st.button("回首頁"):
         st.query_params.clear()
         st.rerun()
 
-# ==========================================
-# 🟠 模式 B: 消費者模式 + 管理員登入 (預設)
-# ==========================================
+# ------------------------------------------
+# 🟠 模式 B: 消費者 + 管理員 (預設)
+# ------------------------------------------
 else:
-    # --- 側邊欄：管理員登入 ---
+    # --- 側邊欄 ---
     with st.sidebar:
-        st.header("🔒 管理員專區")
-        password = st.text_input("輸入密碼", type="password")
-        is_admin = False
+        st.header("🔒 管理員登入")
+        password = st.text_input("密碼", type="password")
         
         if password == "ykk8880820":
-            is_admin = True
-            st.success("✅ 管理員身分驗證成功")
-            
+            st.success("✅ 已登入")
             st.divider()
-            st.subheader("📱 產生商家 QR Code")
-            st.info("選一個店家，產生專屬後台連結")
-            qr_shop = st.selectbox("選擇店家", list(SHOPS_DB.keys()))
             
-            # 自動偵測目前網址 (如果是在本地跑 localhost，上線後會變)
-            # 這裡預設為你 Streamlit Cloud 的網址結構
-            base_url = "https://no-hungry.streamlit.app" 
-            # 💡 注意：請把上面這行換成你實際的網址，例如 https://your-app-name.streamlit.app
+            # === 管理員專屬：店家 QR Code 列表 ===
+            st.subheader("📱 商家 QR Code 列表")
+            st.caption("以下是 Google Sheet 中所有店家的固定連結：")
             
-            shop_link = f"{base_url}/?mode=shop&name={urllib.parse.quote(qr_shop)}"
+            # 讓管理員輸入或確認網址 (避免預設錯誤)
+            app_url = st.text_input("APP 網址", value=BASE_APP_URL)
             
-            st.code(shop_link, language="text")
-            st.caption("👆 複製這個連結，或讓商家掃描下方 QR Code")
+            # 列出所有店家
+            shop_list = list(SHOPS_DB.keys())
+            selected_qr_shop = st.selectbox("預覽特定店家 QR Code", shop_list)
             
-            # 產生 QR Code 圖片
-            qr_api = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={urllib.parse.quote(shop_link)}"
-            st.image(qr_api, caption=f"{qr_shop} 後台入口")
-            
-            st.divider()
-            if st.button("🔄 強制刷新全站"):
+            if selected_qr_shop:
+                link = f"{app_url}/?mode=shop&name={urllib.parse.quote(selected_qr_shop)}"
+                qr_img = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(link)}"
+                
+                st.image(qr_img, caption=f"{selected_qr_shop}")
+                st.code(link)
+                st.info("👆 這是固定網址，只要店名不改，這個碼永久有效。")
+
+            if st.button("清除快取 (資料更新用)"):
                 st.cache_data.clear()
                 st.rerun()
 
-    # --- 主畫面內容 ---
-    st.title("🍱 餓不死地圖 (剩食優惠)")
+    # --- 主畫面 ---
+    st.title("🍱 餓不死地圖")
     
-    if is_admin:
-        st.warning("🔧 管理員模式開啟：您可以刪除訂單、查看完整資料")
+    # 地圖
+    st.map(MAP_DATA, zoom=13, use_container_width=True)
     
-    # 1. 地圖區
-    st.subheader("📍 附近優惠地圖")
-    st.map(MAP_DATA, zoom=14, use_container_width=True)
-
     st.divider()
     
-    # 2. 下單與列表區
     c1, c2 = st.columns([1, 1.5])
     
     with c1:
-        st.subheader("💰 選擇店家搶購")
-        target_shop = st.selectbox("請選擇", list(SHOPS_DB.keys()))
-        shop_info = SHOPS_DB[target_shop]
+        st.subheader("💰 下單區")
+        # 動態讀取店家選單
+        target_shop = st.selectbox("選擇店家", list(SHOPS_DB.keys()))
         
-        st.info(f"🎯 {shop_info['item']}\n\n💵 特價 ${shop_info['price']} (限量 {shop_info['stock']} 份)")
-        
-        user_input = st.text_input("您的暱稱", placeholder="例如: Ykk")
-        
-        if st.button("🚀 下單搶購", type="primary", use_container_width=True):
-            if not user_input:
-                st.warning("請輸入名字！")
-            else:
-                with st.spinner("連線確認中..."):
-                    try:
-                        # 組合：店名 - 商品
-                        full_item_name = f"{target_shop} - {shop_info['item']}"
-                        payload = {'user': user_input, 'item': full_item_name}
-                        
-                        response = requests.post(GAS_URL, json=payload)
-                        if response.status_code == 200:
-                            res = response.json()
-                            if res.get("result") == "success":
-                                st.balloons()
-                                st.success(f"✅ {res.get('message')}")
-                                st.cache_data.clear() # 刷新讓右邊更新
-                            else:
-                                st.error(f"⚠️ {res.get('message')}")
-                        else:
-                            st.error("連線失敗")
-                    except Exception as e:
-                        st.error(f"錯誤: {e}")
+        if target_shop:
+            info = SHOPS_DB[target_shop]
+            st.info(f"📍 {target_shop}\n\n🍱 {info['item']} | 💲 ${info['price']} | 📦 總量 {info['stock']}")
+            
+            u_name = st.text_input("您的暱稱")
+            if st.button("🚀 搶購", type="primary", use_container_width=True):
+                if not u_name:
+                    st.warning("請輸入名字")
+                else:
+                    with st.spinner("處理中..."):
+                        try:
+                            full_item = f"{target_shop} - {info['item']}"
+                            payload = {'user': u_name, 'item': full_item}
+                            requests.post(GAS_URL, json=payload)
+                            st.balloons()
+                            st.success("下單成功！")
+                            st.cache_data.clear()
+                        except Exception as e:
+                            st.error(str(e))
 
     with c2:
-        st.subheader("📋 即時搶購名單")
-        data = get_data()
-        
+        st.subheader("📋 即時名單")
+        data = get_orders()
         if data:
             df = pd.DataFrame(data)
-            
-            # === 管理員：刪除功能 ===
-            if is_admin:
-                st.write("🛠️ **訂單管理**")
-                if not df.empty:
-                    # 建立刪除選單
-                    del_options = [f"{i}: {r.get('user', r.get('姓名','?'))} - {r.get('item', r.get('領取項目','?'))}" for i, r in df.iterrows()]
-                    target_del = st.selectbox("選擇要刪除的訂單", del_options)
-                    
-                    if st.button("🗑️ 刪除此單"):
-                        row_idx = int(target_del.split(":")[0])
-                        if delete_order(row_idx):
-                            st.success("已刪除！")
-                            st.cache_data.clear()
-                            st.rerun()
-                        else:
-                            st.error("刪除失敗")
+            # 管理員刪除功能
+            if password == "ykk8880820":
+                st.write("🛠️ **管理員刪單**")
+                options = [f"{i}: {r.get('user','?')} - {r.get('item','?')}" for i, r in df.iterrows()]
+                target_del = st.selectbox("選擇刪除", options)
+                if st.button("🗑️ 確認刪除"):
+                    idx = int(target_del.split(":")[0])
+                    delete_order(idx)
+                    st.success("已刪除")
+                    st.cache_data.clear()
+                    st.rerun()
                 st.dataframe(df, use_container_width=True)
-            
-            # === 一般人：唯讀 ===
             else:
-                if not df.empty:
-                    # 嘗試抓取正確的欄位名稱顯示
-                    cols = [c for c in df.columns if c in ['時間', '姓名', 'user', 'item', '領取項目']]
-                    st.dataframe(df[cols].tail(10), use_container_width=True)
-                    st.caption("顯示最近 10 筆交易")
-                else:
-                    st.info("尚無資料")
+                # 一般人看簡略版
+                cols = [c for c in df.columns if c in ['時間', 'user', 'item', '姓名', '領取項目']]
+                st.dataframe(df[cols].tail(10), use_container_width=True)
         else:
-            st.info("目前無訂單")
+            st.info("暫無訂單")
