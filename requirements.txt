@@ -1,3 +1,2 @@
 streamlit
-pandas
-qrcode
+streamlit_js_eval
