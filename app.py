@@ -9,6 +9,16 @@ from datetime import datetime, timedelta
 # --- 1. 系統配置 ---
 st.set_page_config(page_title="餓不死系統", page_icon="🍱", layout="wide")
 
+# --- [新增] CSS 隱身術：隱藏官方選單與浮水印 ---
+hide_streamlit_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            </style>
+            """
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 # --- 2. 全域資料庫 ---
 @st.cache_resource
 def get_database():
