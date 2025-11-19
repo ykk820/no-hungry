@@ -26,7 +26,7 @@ def get_database():
         "inventory": [],   
         "users": {},       
         "last_check_date": datetime.now().date(),
-        "base_url": "" # 新增：用來存你的網站網址
+        "base_url": "" 
     }
 
 db = get_database()
@@ -69,27 +69,24 @@ def view_admin():
     st.title("🛠️ 餓不死系統 - 總指揮中心")
     st.success("🔓 管理員連線中")
     
-    # --- 新增功能：設定網站網址 ---
+    # 設定網址
     with st.expander("⚙️ 系統設定 (QR Code 修正)", expanded=not bool(db["base_url"])):
-        st.info("👇 請先在這裡貼上你目前的網站網址，QR Code 才會有效！")
-        url_input = st.text_input("系統網址 (Base URL)", value=db["base_url"], placeholder="例如: https://starve-not-ykk.streamlit.app")
+        st.info("👇 貼上你的網站網址，讓 QR Code 生效")
+        url_input = st.text_input("系統網址", value=db["base_url"], placeholder="https://...")
         if st.button("儲存網址"):
-            # 去除網址最後面的斜線，避免重複
             if url_input.endswith("/"): url_input = url_input[:-1]
             db["base_url"] = url_input
-            st.success("網址已更新！下方的 QR Code 現在有效了。")
+            st.success("已更新！")
             st.rerun()
 
-    # --- 新增店家 ---
-    with st.expander("➕ 新增合作店家 (含地圖定位)", expanded=False):
+    # 新增店家
+    with st.expander("➕ 新增合作店家", expanded=False):
         with st.form("add_shop"):
             c1, c2 = st.columns(2)
             new_name = c1.text_input("店家名稱")
             location_zone = c2.selectbox("所在區域", list(TKU_LOCATIONS.keys()))
-            
             default_lat = TKU_LOCATIONS[location_zone]["lat"]
             default_lon = TKU_LOCATIONS[location_zone]["lon"]
-            
             c3, c4 = st.columns(2)
             map_url = c3.text_input("Google Maps 連結", placeholder="選填")
             
@@ -111,52 +108,47 @@ def view_admin():
 
     st.divider()
 
-    # --- 店家列表 ---
+    # 店家列表
     if not db["shops"]:
         st.warning("⚠️ 目前無店家資料。")
     else:
         st.markdown("### 📋 店家列表")
-        
-        # 檢查是否有設定網址
-        if not db["base_url"]:
-            st.error("⚠️ 警告：尚未設定系統網址，QR Code 目前無效！請在上方「⚙️ 系統設定」填寫。")
+        if not db["base_url"]: st.error("⚠️ 請先設定網址！")
             
         for s_id, info in db["shops"].items():
             with st.container(border=True):
                 col_a, col_b, col_c = st.columns([1, 2, 1])
                 
-                # 組合完整網址：網址 + ?shop_key=...
                 if db["base_url"]:
                     full_qr_url = f"{db['base_url']}/?shop_key={info['key']}"
                 else:
-                    full_qr_url = f"?shop_key={info['key']}" # 暫時無效的
+                    full_qr_url = f"?shop_key={info['key']}"
                 
                 with col_a:
                     st.image(generate_qr_code(full_qr_url), width=100)
                 with col_b:
                     st.subheader(info['name'])
                     st.caption(f"📍 {info['location']}")
-                    if db["base_url"]:
-                        st.code(full_qr_url, language=None)
-                    else:
-                        st.caption("❌ 請先設定網址")
                 with col_c:
+                    # 這裡有改動：強制寫入網址參數
                     if st.button("進入店家模式 ➜", key=f"enter_{s_id}"):
-                        st.session_state.is_admin_testing = True
-                        st.query_params.shop_key = info['key']
+                        st.query_params["shop_key"] = info['key'] # 強制更新網址
                         st.rerun()
 
     st.divider()
+    # 這裡有改動：強制寫入參數，雖然醜一點但能防止 F5 跳掉
     if st.button("進入學生地圖模式 ➜", type="primary"):
-        st.session_state.is_admin_testing = True
-        st.session_state.force_student_view = True
+        st.query_params["test_mode"] = "student" 
         st.rerun()
 
 # [B] 店家端
 def view_shop(shop_id):
+    # 再次確認店家是否存在
     if shop_id not in db["shops"]:
-        st.error("無效的連結。")
-        if st.button("回首頁"): st.query_params.clear(); st.rerun()
+        st.error("無效的連結或店家已被刪除。")
+        if st.button("回首頁"): 
+            st.query_params.clear()
+            st.rerun()
         return
 
     shop_info = db["shops"][shop_id]
@@ -168,22 +160,17 @@ def view_shop(shop_id):
     with c_title:
         st.title(f"👨‍🍳 {shop_info['name']}")
     with c_btn:
-        if st.session_state.get("is_admin_testing"):
-            if st.button("⬅️ 回後台", type="primary"):
-                st.session_state.is_admin_testing = False
-                st.query_params.clear()
-                st.rerun()
-        else:
-            if st.button("登出"):
-                st.query_params.clear()
-                st.rerun()
+        # 登出時清除網址參數
+        if st.button("登出"):
+            st.query_params.clear()
+            st.rerun()
 
     st.divider()
     col_status, col_action = st.columns([2, 1])
     
     with col_status:
         if is_open:
-            st.success(f"🟢 **營業中** (架上剩 {total_qty} 份)")
+            st.success(f"🟢 **營業中** (剩 {total_qty} 份)")
         else:
             st.info("⚫ **已打烊**")
             
@@ -243,10 +230,10 @@ def view_shop(shop_id):
 
 # [C] 學生端
 def view_student():
-    if st.session_state.get("is_admin_testing") and st.session_state.get("force_student_view"):
+    # 檢查是否為測試模式
+    if st.query_params.get("test_mode") == "student":
         if st.button("⬅️ 結束測試 (回後台)", type="primary"):
-            st.session_state.is_admin_testing = False
-            st.session_state.force_student_view = False
+            st.query_params.clear()
             st.rerun()
             
     st.title("🍱 餓不死地圖")
@@ -290,7 +277,6 @@ def view_student():
     
     if active_shops_data:
         st.subheader("🗺️ 剩食戰情室")
-        st.caption("紅點越大，剩食越多！")
         map_df = pd.DataFrame(active_shops_data)
         st.map(map_df, latitude="lat", longitude="lon", size="size", color="color", zoom=15)
     else:
@@ -340,30 +326,39 @@ def view_student():
                         time.sleep(0.5)
                         st.rerun()
 
-# --- 6. 路由與權限 ---
-params = st.query_params
-shop_key = params.get("shop_key", None)
+# --- 6. 路由與權限 (Router) - 這裡最重要 ---
+
+# 獲取 URL 參數 (新版寫法)
+shop_key = st.query_params.get("shop_key", None)
+test_mode = st.query_params.get("test_mode", None)
+
 target_shop = None
 
+# 1. 檢查是否有店家 Key (最高優先級)
 if shop_key:
     for s_id, info in db["shops"].items():
         if info['key'] == shop_key:
             target_shop = s_id
+            break
 
-is_testing_student = st.session_state.get("force_student_view", False)
-
+# 2. 路由分流
 if target_shop:
+    # 如果網址有店家 Key，無論如何都去店家頁面 (F5 也不怕)
     view_shop(target_shop)
-elif is_testing_student:
+
+elif test_mode == "student":
+    # 如果網址有 test_mode=student，就去學生測試頁
     view_student()
+
 else:
-    current_view = "student"
+    # 預設進入學生首頁 (同時也是管理員入口)
     with st.sidebar:
         st.divider()
         with st.expander("🔧 系統管理"):
             pwd = st.text_input("密碼", type="password")
             if pwd == "ykk8880820":
                 st.success("驗證成功")
+                # 這裡我改成了 session state，因為管理員登入比較敏感，F5 登出是正常的資安設計
                 if st.button("進入指揮中心", type="primary"):
                     st.session_state.is_admin_logged_in = True
                     st.rerun()
