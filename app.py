@@ -5,18 +5,25 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import urllib.parse
 import time
+import uuid # 引入 UUID 庫來生成唯一ID
 
 # ==========================================
-# 1. 系統全域設定 (已更新新網址)
+# 0. 設置唯一身份識別碼 (UUID)
 # ==========================================
-# 🔴 更新後的 GAS 網址 🔴
+# 每個使用者訪問時，如果 session_state 中沒有 ID，則生成一個新的 UUID。
+# 這個 ID 將作為限購和黑名單的依據。
+if 'user_uuid' not in st.session_state:
+    st.session_state['user_uuid'] = str(uuid.uuid4())
+
+# ==========================================
+# 1. 系統全域設定 (不變)
+# ==========================================
 GAS_URL = "https://script.google.com/macros/s/AKfycbz0ltqrGDA1nwXoqchQ-bTHNIW5jDt5OesfcWs6NNLgb-H2p6t6sM3ikxQZVr11arHtyg/exec"
-
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
-BASE_APP_URL = "https://no-hungry.streamlit.app" 
+BASE_APP_URL = "https://no-hungry.streamlit.app"
 
 # ==========================================
-# 2. 資料庫連線函式
+# 2. 資料庫連線函式 (保持不變)
 # ==========================================
 def get_client():
     try:
@@ -73,8 +80,7 @@ def delete_order(idx):
     return False
 
 def add_shop_to_backend(data):
-    """將新店家資料透過 GAS 寫入 Google Sheet (讓 GAS 處理地址轉座標)"""
-    data['action'] = 'add_shop' # 關鍵：設定動作為新增店家
+    data['action'] = 'add_shop'
     try:
         response = requests.post(GAS_URL, json=data)
         if response.status_code == 200:
@@ -95,7 +101,7 @@ params = st.query_params
 current_mode = params.get("mode", "consumer")
 shop_target = params.get("name", None)
 
-# --- 商家後台模式 (A) ---
+# --- 商家後台模式 (A) --- (保持不變)
 if current_mode == "shop" and shop_target in SHOPS_DB:
     
     shop_info = SHOPS_DB[shop_target]
@@ -185,15 +191,14 @@ else:
                         if result['result'] == 'success':
                             st.success(result['message'])
                             st.balloons()
-                            st.cache_data.clear() # 清除快取，讓新店馬上顯示
+                            st.cache_data.clear()
                             time.sleep(1)
                             st.rerun()
                         else:
                             st.error(f"新增失敗: {result['message']}")
-
-
-            st.divider()
+            
             # 🚀 快速進入商家後台 (保留)
+            st.divider()
             st.subheader("🚀 快速進入商家後台")
             target_shop_admin = st.selectbox("選擇要管理的店家", list(SHOPS_DB.keys()))
             if st.button("進入該店後台"):
@@ -201,7 +206,8 @@ else:
                 st.query_params["name"] = target_shop_admin
                 st.rerun()
             
-            # 產生 QR Code (保留)
+            # (QR Code 功能保留)
+            st.divider()
             st.subheader("📱 產生 QR Code")
             qr_shop = st.selectbox("選擇店家 (QR Code)", list(SHOPS_DB.keys()))
             shop_link = f"{BASE_APP_URL}/?mode=shop&name={urllib.parse.quote(qr_shop)}"
@@ -212,29 +218,30 @@ else:
                 st.cache_data.clear()
                 st.rerun()
 
-    # --- 主畫面 ---
+
+    # --- 主畫面 (Consumer Logic) ---
     st.title("🍱 餓不死地圖")
+    st.info(f"您的唯一ID：{st.session_state['user_uuid'][:8]}... | 此ID用於防範棄單。")
     
     if not SHOPS_DB:
         st.warning("⚠️ 無法讀取店家資料，請檢查 Google Sheet 設定。")
         st.stop()
 
-    # 區域篩選功能
+    # (其餘地圖、篩選邏輯不變)
     all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
     selected_region = st.selectbox("📍 請選擇區域", ["所有區域"] + all_regions)
     
     if selected_region == "所有區域":
         filtered_shops = SHOPS_DB
     else:
-        filtered_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == selected_region}
+        filtered_shops = {k: v for k: v in SHOPS_DB.items() if v['region'] == selected_region}
 
     # 地圖顯示
-    if filtered_shops:
-        map_df = pd.DataFrame([
-            {'shop_name': k, 'lat': v['lat'], 'lon': v['lon']} for k, v in filtered_shops.items()
-        ])
-        map_zoom = 7 if selected_region == "所有區域" else 14
-        st.map(map_df, zoom=map_zoom, use_container_width=True)
+    map_df = pd.DataFrame([
+        {'shop_name': k, 'lat': v['lat'], 'lon': v['lon']} for k, v in filtered_shops.items()
+    ])
+    map_zoom = 7 if selected_region == "所有區域" else 14
+    st.map(map_df, zoom=map_zoom, use_container_width=True)
     
     st.divider()
 
@@ -272,6 +279,7 @@ else:
         gmap_url = f"https://www.google.com/maps/search/?api=1&query={info['lat']},{info['lon']}"
         st.link_button("🚗 開啟 Google Map 導航前往", gmap_url)
         
+        # 🔴 暱稱輸入 (用於顯示，ID仍為UUID) 🔴
         u_name = st.text_input("輸入您的暱稱 (作為取餐/叫號依據)")
         
         if is_queue_mode:
@@ -286,8 +294,16 @@ else:
                 with st.spinner("連線中..."):
                     try:
                         full_item = f"{target} - {info['item']}"
-                        requests.post(GAS_URL, json={'action': 'order', 'user': u_name, 'item': full_item})
+                        # 傳送 UUID 作為 user_id
+                        requests.post(GAS_URL, json={
+                            'action': 'order', 
+                            'user_id': st.session_state['user_uuid'], 
+                            'user': u_name,
+                            'store': target,
+                            'item': full_item
+                        })
                         st.success(f"成功！")
+                        st.balloons()
                         st.cache_data.clear()
                         time.sleep(1)
                         st.rerun()
