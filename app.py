@@ -20,7 +20,6 @@ if 'inventory' not in st.session_state:
         {"shop_id": "u2", "item": "收攤大補帖", "price": 50, "qty": 3, "status": "還有", "desc": "綜合滷味包"},
     ]
 if 'users' not in st.session_state:
-    # last_buy_time 改成字典格式：{'shop_id': timestamp}
     st.session_state.users = {
         "bad_guy@gmail.com": {"missed": 2, "banned": False, "last_buy_time": {}}
     }
@@ -35,13 +34,18 @@ def generate_qr_code(url):
     img.save(buf)
     return buf.getvalue()
 
-# [A] 軍師後台
+# [A] 軍師後台 (隱藏版)
 def view_admin():
     st.title("🛠️ 餓不死系統 - 總指揮中心")
+    st.success("🔓 管理員身分驗證通過")
     st.info("請使用手機掃描下方的 QR Code 進入店家模式")
+    
     for s_id, info in st.session_state.shops.items():
         col_a, col_b = st.columns([1, 3])
+        # 這裡的網址要改成你實際上線後的網址
+        # 暫時使用相對路徑 ?shop_key=...
         shop_url = f"?shop_key={info['key']}" 
+        
         with col_a:
             st.image(generate_qr_code(shop_url), width=150)
         with col_b:
@@ -74,70 +78,54 @@ def view_shop(shop_id):
 def view_student():
     st.title("🍱 餓不死地圖")
     
-    # 登入邏輯
     with st.sidebar:
         email = st.text_input("輸入 Gmail 登入", "test@gmail.com")
         
         if email not in st.session_state.users:
-            # 初始化：注意 last_buy_time 是一個空字典 {}
             st.session_state.users[email] = {"missed": 0, "banned": False, "last_buy_time": {}}
         
         user = st.session_state.users[email]
-        
-        # 確保舊資料格式相容 (防止報錯)
-        if not isinstance(user.get('last_buy_time'), dict):
-            user['last_buy_time'] = {}
+        if not isinstance(user.get('last_buy_time'), dict): user['last_buy_time'] = {}
 
         if user['banned']:
             st.error("⛔ 帳號已被封鎖")
             st.stop()
         
         st.success(f"歡迎, {email}")
-        st.caption("💡 規則：同一家店 10分鐘內 限購一份，但可以去搶別家！")
+        st.caption("💡 規則：同一家店 10分鐘內 限購一份")
 
     st.subheader("🔥 正在出清")
     for item in st.session_state.inventory:
         shop = st.session_state.shops[item['shop_id']]
-        
-        # 計算該使用者對「這家店」的冷卻狀態
         last_shop_buy = user['last_buy_time'].get(item['shop_id'], 0)
         is_cooldown = (time.time() - last_shop_buy) < 600
         
         if item['qty'] > 0:
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1])
-                
-                # 顯示商品資訊
                 c1.markdown(f"### {shop['name']}")
                 c1.write(f"🍱 **{item['item']}** (${item['price']})")
                 if is_cooldown:
                     wait_min = int(600 - (time.time() - last_shop_buy)) // 60
-                    c1.warning(f"⏳ 這家店還要等 {wait_min + 1} 分鐘才能再買")
+                    c1.warning(f"⏳ 冷卻中 ({wait_min + 1}m)")
 
                 c2.metric("剩餘", item['qty'])
-                
-                # 按鈕邏輯
-                # 如果在冷卻中，按鈕文字會變，雖然可以按，但會被擋
                 btn_label = "我要搶" if not is_cooldown else "🚫 休息中"
                 
                 if c2.button(btn_label, key=f"buy_{item['shop_id']}"):
-                    # 1. 檢查：這家店是否在 CD 中？
                     if is_cooldown:
-                         st.toast(f"❌ {shop['name']} 你剛買過，留給別人吧！去看看別家。", icon="🚫")
+                         st.toast(f"❌ {shop['name']} 還在 CD 時間！", icon="🚫")
                     else:
-                        # 2. 通過：扣庫存
                         item['qty'] -= 1
-                        # 3. 紀錄：更新這家店的購買時間
                         user['last_buy_time'][item['shop_id']] = time.time()
-                        
                         st.balloons()
-                        st.success(f"✅ 成功搶到 {shop['name']}！")
+                        st.success(f"✅ 搶購成功！")
                         time.sleep(1)
                         st.rerun()
         else:
             st.caption(f"{shop['name']} - 已售完")
 
-# --- 3. 路由 ---
+# --- 3. 路由控制 ---
 params = st.query_params
 shop_key = params.get("shop_key", None)
 target_shop = None
@@ -146,13 +134,26 @@ if shop_key:
         if info['key'] == shop_key:
             target_shop = s_id
 
+# --- 4. 權限管理 (隱藏後台) ---
+current_view = "student"
+
 with st.sidebar:
     st.divider()
-    mode = st.radio("切換視角", ["學生端", "軍師後台"])
+    # 這裡就是你要的專屬密碼
+    with st.expander("🔧 系統管理 (Admin Only)"):
+        admin_pwd = st.text_input("輸入管理密碼", type="password")
+        
+        # 修改點：密碼已更新為 ykk8880820
+        if admin_pwd == "ykk8880820":  
+            st.success("身分驗證成功")
+            current_view = "admin"
+        elif admin_pwd:
+            st.error("密碼錯誤")
 
+# --- 5. 最終畫面呈現 ---
 if target_shop:
     view_shop(target_shop)
-elif mode == "軍師後台":
+elif current_view == "admin":
     view_admin()
 else:
     view_student()
