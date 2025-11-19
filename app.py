@@ -7,17 +7,14 @@ import urllib.parse
 import time
 
 # ==========================================
-# 1. 系統全域設定
+# 1. 系統全域設定 (請確保這段是正確的)
 # ==========================================
-# 你的 GAS 網址
 GAS_URL = "https://script.google.com/macros/s/AKfycbwZsrOvS7QrNTaXVcJo1L7HZpmcUSvjZg6JPOPjPbW5-9EYzRUzVYxVs0K--Tp93DxhKQ/exec"
-# 你的 Google Sheet ID
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
-# 你的 APP 網址
-BASE_APP_URL = "https://no-hungry.streamlit.app"
+BASE_APP_URL = "https://no-hungry.streamlit.app" # 你的 APP 網址
 
 # ==========================================
-# 2. 資料庫連線
+# 2. 資料庫連線函式 (保持不變)
 # ==========================================
 def get_client():
     try:
@@ -46,7 +43,7 @@ def load_data():
                 name = str(row.get('店名', '')).strip()
                 if name:
                     shops_db[name] = {
-                        'region': str(row.get('地區', '未分類')), # 新增地區
+                        'region': str(row.get('地區', '未分類')), 
                         'lat': float(row.get('緯度', 0) or 0),
                         'lon': float(row.get('經度', 0) or 0),
                         'item': str(row.get('商品', '優惠商品')),
@@ -85,20 +82,18 @@ params = st.query_params
 current_mode = params.get("mode", "consumer")
 shop_target = params.get("name", None)
 
-# ==========================================
-# 🏪 模式 A: 商家後台
-# ==========================================
+# --- 商家後台模式 ---
 if current_mode == "shop" and shop_target in SHOPS_DB:
+    
+    # ... (商家後台邏輯，保持不變) ...
     st.title(f"🏪 {shop_target} - 商家後台")
     
-    # 權限控制：如果是管理員跳進來的，顯示返回管理區
     if st.button("🔄 刷新數據"):
         st.cache_data.clear()
         st.rerun()
         
     shop_info = SHOPS_DB[shop_target]
     
-    # 計算數據
     shop_orders = pd.DataFrame()
     sold = 0
     if not ORDERS_DF.empty:
@@ -108,7 +103,6 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
     remain = shop_info['stock'] - sold
     rev = sold * shop_info['price']
     
-    # 儀表板
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("📦 總庫存", shop_info['stock'])
     c2.metric("✅ 已售出", sold)
@@ -118,8 +112,7 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
     st.divider()
     st.subheader("📋 現場核銷名單")
     if not shop_orders.empty:
-        cols = [c for c in shop_orders.columns if c in ['時間', '姓名', 'user', 'item']]
-        st.dataframe(shop_orders[cols], use_container_width=True)
+        st.dataframe(shop_orders, use_container_width=True)
     else:
         st.info("目前無待處理訂單")
         
@@ -127,11 +120,9 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
         st.query_params.clear()
         st.rerun()
 
-# ==========================================
-# 🗺️ 模式 B: 消費者 + 管理員
-# ==========================================
+# --- 消費者 + 管理員模式 ---
 else:
-    # --- 管理員側邊欄 ---
+    # --- 側邊欄：管理員 ---
     with st.sidebar:
         st.header("🔒 管理員")
         pwd = st.text_input("密碼", type="password")
@@ -141,7 +132,7 @@ else:
             st.success("已登入")
             st.divider()
             
-            # 🚀 新功能：管理員上帝模式 (直接跳轉)
+            # 🚀 快速進入商家後台
             st.subheader("🚀 快速進入商家後台")
             target_shop_admin = st.selectbox("選擇要管理的店家", list(SHOPS_DB.keys()))
             if st.button("進入該店後台"):
@@ -149,11 +140,14 @@ else:
                 st.query_params["name"] = target_shop_admin
                 st.rerun()
             
+            # ... (QR Code 功能保留) ...
             st.divider()
             st.subheader("📱 產生 QR Code")
-            # (原本的 QR Code 功能保留)
-            shop_link = f"{BASE_APP_URL}/?mode=shop&name={urllib.parse.quote(target_shop_admin)}"
+            qr_shop = st.selectbox("選擇店家 (QR Code)", list(SHOPS_DB.keys()))
+            
+            shop_link = f"{BASE_APP_URL}/?mode=shop&name={urllib.parse.quote(qr_shop)}"
             st.image(f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}")
+            st.code(shop_link)
             
             if st.button("清除快取"):
                 st.cache_data.clear()
@@ -163,12 +157,11 @@ else:
     st.title("🍱 餓不死地圖")
     
     if not SHOPS_DB:
-        st.warning("⚠️ 請在 Google Sheet 新增 '店家設定' 分頁並填寫資料 (含'地區'欄位)。")
+        st.warning("⚠️ 無法讀取店家資料，請檢查 Google Sheet 設定。")
         st.stop()
 
     # 1. 區域篩選功能
     all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
-    # 預設選第一個區域，或全部
     selected_region = st.selectbox("📍 請選擇區域", ["所有區域"] + all_regions)
     
     # 篩選店家
@@ -177,25 +170,29 @@ else:
     else:
         filtered_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == selected_region}
 
-    # 2. 地圖顯示
+    # 2. 地圖顯示 (台灣全覽邏輯修正處)
     if filtered_shops:
         map_df = pd.DataFrame([
             {'shop_name': k, 'lat': v['lat'], 'lon': v['lon']} for k, v in filtered_shops.items()
         ])
-        # 根據篩選結果自動縮放地圖
-        st.map(map_df, zoom=14 if selected_region != "所有區域" else 11, use_container_width=True)
+        
+        # 🔴 這裡就是「台灣全覽」的修正處 🔴
+        if selected_region == "所有區域":
+            map_zoom = 7 # 7 級縮放可看見整個台灣
+        else:
+            map_zoom = 14 # 特定區域維持高縮放率
+            
+        st.map(map_df, zoom=map_zoom, use_container_width=True)
     else:
         st.info("該區域目前沒有合作店家。")
 
     st.divider()
 
-    # 3. 下單與排隊
+    # 3. 下單與列表 (保持不變)
     c1, c2 = st.columns([1.2, 1])
     
     with c1:
         st.subheader("💰 搶購下單")
-        
-        # 只顯示篩選後區域的店家
         target = st.selectbox("選擇店家", list(filtered_shops.keys()))
         info = filtered_shops[target]
         
@@ -208,30 +205,24 @@ else:
         current_stock = info['stock'] - queue_count
         if current_stock < 0: current_stock = 0
         
-        # 顯示店家資訊卡片
+        # 顯示資訊卡片
         st.info(f"""
         **{target}** ({info['region']})
         
-        🍱 商品：{info['item']}
-        💲 價格：${info['price']}
-        📦 剩餘：**{current_stock}** / {info['stock']}
+        🍱 商品：**{info['item']}**
+        💲 價格：**${info['price']}**
+        📦 剩餘：**{current_stock}** 份 (總量 {info['stock']})
         👥 目前排隊：**{queue_count}** 人
         """)
         
-        # 🚗 Google Map 導航按鈕
+        # 導航按鈕
         gmap_url = f"https://www.google.com/maps/search/?api=1&query={info['lat']},{info['lon']}"
         st.link_button("🚗 開啟 Google Map 導航前往", gmap_url)
         
-        st.write("") # 空行
-        
-        # 搶購表單
         u_name = st.text_input("輸入您的暱稱")
         
         btn_txt = "🚀 立即排隊搶購"
-        btn_state = False
-        if current_stock <= 0:
-            btn_txt = "❌ 已售完"
-            btn_state = True
+        btn_state = (current_stock <= 0)
             
         if st.button(btn_txt, type="primary", disabled=btn_state, use_container_width=True):
             if u_name:
@@ -239,7 +230,7 @@ else:
                     try:
                         requests.post(GAS_URL, json={'user': u_name, 'item': f"{target} - {info['item']}"})
                         st.balloons()
-                        st.success("排隊成功！請儘速前往店家。")
+                        st.success("排隊成功！")
                         st.cache_data.clear()
                         time.sleep(1)
                         st.rerun()
@@ -250,11 +241,9 @@ else:
     with c2:
         st.subheader("📋 即時排隊名單")
         
-        # 顯示該店家的排隊狀況 (如果有選區域)
         if not ORDERS_DF.empty:
-            # 簡單過濾
+            # 根據篩選過濾排隊名單 (Admin模式包含刪除)
             if selected_region != "所有區域":
-                # 只顯示目前選中店家的單，比較清爽
                 display_df = ORDERS_DF[ORDERS_DF.apply(lambda x: target in str(x.values), axis=1)]
                 st.caption(f"顯示 {target} 的排隊狀況")
             else:
@@ -262,13 +251,12 @@ else:
                 st.caption("顯示全區排隊狀況")
 
             if not display_df.empty:
-                # 管理員刪單
                 if is_admin:
                     st.write("🛠️ 管理員操作")
                     del_opts = [f"{i}: {r.get('user','?')} - {r.get('item','?')}" for i, r in display_df.iterrows()]
-                    del_tg = st.selectbox("刪除訂單", del_opts)
-                    if st.button("🗑️ 刪除"):
-                        idx = int(del_tg.split(":")[0])
+                    target_del = st.selectbox("刪除訂單", del_opts)
+                    if st.button("🗑️ 確認刪除"):
+                        idx = int(target_del.split(":")[0])
                         delete_order(idx)
                         st.rerun()
                 
