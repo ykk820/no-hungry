@@ -5,13 +5,20 @@ import pandas as pd
 import urllib.parse
 from datetime import datetime
 import uuid 
-import numpy as np # 新增 numpy 處理數據範圍
+import numpy as np 
 
 # ==========================================
 # 0. 設置唯一身份識別碼 (UUID)
 # ==========================================
 if 'user_uuid' not in st.session_state:
     st.session_state['user_uuid'] = str(uuid.uuid4())
+
+# --- Session State 初始化 ---
+if 'admin_login_visible' not in st.session_state:
+    st.session_state['admin_login_visible'] = False
+if 'target_shop_select' not in st.session_state:
+     st.session_state['target_shop_select'] = None
+
 
 # ==========================================
 # 1. 系統全域設定 
@@ -31,8 +38,11 @@ SUGGESTED_REGIONS_FULL = [
     '台北市信義區 - 市政府'
 ]
 
+# --- 淡江區域篩選關鍵字 ---
+TAMKANG_PREFIX = '新北市淡水區'
+
 # ==========================================
-# 2. 資料庫連線函式與服務 (移除 Lat/Lon 依賴)
+# 2. 資料庫連線函式與服務 
 # ==========================================
 
 # --- 地區名稱清理函式 ---
@@ -105,7 +115,7 @@ def add_shop_to_sheet(data):
         st.error("店家新增失敗。無法連線至 Google Sheets (請檢查 GCP 服務帳戶金鑰)")
         return False
 
-    # 準備寫入資料 (注意：new_row 必須與 Google Sheet 欄位順序一致，Lat/Lon 欄位填 0)
+    # 準備寫入資料 (Lat/Lon 欄位填 0)
     new_row = [
         data['shop_name'], 
         data['region'], # 結構：行政區 - 社區名
@@ -253,7 +263,7 @@ else:
     # --- 側邊欄：管理員 (控制面板) ---
     with st.sidebar:
         
-        # 💡 FIX: 隱藏後台介面：使用按鈕控制登入區塊的顯示
+        # 💡 隱藏後台介面：使用按鈕控制登入區塊的顯示
         if st.button("🔒 管理員登入", use_container_width=True):
             st.session_state['admin_login_visible'] = not st.session_state['admin_login_visible']
 
@@ -279,7 +289,7 @@ else:
             unique_main_regions = sorted(list(set([r.split(' - ')[0].strip() for r in SUGGESTED_REGIONS_FULL])))
             
             st.subheader("➕ 一鍵新增店家")
-            st.caption("請手動將經緯度設為 0, 0")
+            st.caption("經緯度將設為 0, 0。")
             with st.form("add_shop_form"):
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -287,7 +297,6 @@ else:
                     new_item = st.text_input("商品名*", key="new_item", value="剩食套餐")
                     new_price = st.number_input("價格*", min_value=1, value=50) # 價格輸入
                 with col_b:
-                    # ⚠️ FIX: 移除 Lat/Lon 輸入，簡化管理員操作
                     
                     # --- 雙層地區選擇輸入 ---
                     selected_main_region = st.selectbox(
@@ -361,15 +370,27 @@ else:
 
 
     # --- 主畫面 (Consumer Logic) ---
-    st.title("🍱 餓不死清單") # 更改標題
+    st.title("🍱 友善食光訂餐清單") # 更改標題
     st.info(f"您的唯一ID：{st.session_state['user_uuid'][:8]}... | 此ID用於防範棄單。")
     
     if not SHOPS_DB:
         st.warning("⚠️ 無法讀取店家資料，請檢查 Google Sheet 設定。")
         st.stop()
 
-    # --- 篩選器 ---
-    col_filter_1, col_filter_2, col_filter_3, col_filter_4 = st.columns([1, 1, 1, 2]) # 增加預算區間欄位
+    # --- 篩選器 (簡化為兩層，聚焦淡水區域) ---
+    
+    # 1. 預先篩選出所有淡水相關的完整地區名稱
+    all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
+    tamkang_regions = [r for r in all_regions if r.startswith(TAMKANG_PREFIX)] # 這裡將淡水區視為主要焦點
+
+    # 從淡水區的完整地區名稱中提取社區名稱
+    unique_sub_regions = ["所有社區"]
+    if tamkang_regions:
+        sub_regions_raw = [r.split(' - ')[1].strip() for r in tamkang_regions if ' - ' in r]
+        unique_sub_regions = ["所有社區"] + sorted(list(set(sub_regions_raw)))
+    
+    
+    col_filter_1, col_filter_2, col_filter_3 = st.columns([1.5, 1.5, 3]) 
 
     # 獲取所有店家的價格範圍
     all_prices = [v['price'] for v in SHOPS_DB.values() if isinstance(v['price'], int)]
@@ -379,33 +400,10 @@ else:
     
     
     with col_filter_1:
-        # Level 1: 行政區篩選
-        all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
-        unique_main_regions = sorted(list(set([r.split(' - ')[0].strip() for r in all_regions if ' - ' in r])))
-        selected_main_region = st.selectbox(
-            "📍 行政區", 
-            ["所有區域"] + unique_main_regions,
-            index=0,
-            key="main_region_selectbox",
-            on_change=lambda: st.session_state.update(
-                main_region_select=st.session_state.main_region_selectbox,
-                target_shop_select=None 
-            )
-        )
-    
-    # 過濾 Level 2 選項
-    main_filter_key = clean_region_name(st.session_state['main_region_select'])
-    sub_regions = ["所有社區"]
-    
-    if main_filter_key != "所有區域":
-        sub_regions_raw = [r.split(' - ')[1].strip() for r in all_regions if r.startswith(main_filter_key)]
-        sub_regions = ["所有社區"] + sorted(list(set(sub_regions_raw)))
-
-    with col_filter_2:
-        # Level 2: 社區篩選
+        # Level 1: 社區/次分區篩選 (替代原本的行政區篩選)
         selected_sub_region = st.selectbox(
-            "🏘️ 社區/次分區", 
-            sub_regions,
+            "🏘️ 社區/次分區 (淡水區)", 
+            unique_sub_regions,
             index=0,
             key="sub_region_selectbox",
             on_change=lambda: st.session_state.update(
@@ -413,8 +411,8 @@ else:
             )
         )
         
-    with col_filter_3:
-        # Level 3: 預算區間篩選 (新功能)
+    with col_filter_2:
+        # Level 2: 預算區間篩選
         budget_range = st.slider(
             "💲 預算區間",
             min_value=min_price,
@@ -425,20 +423,17 @@ else:
         )
 
 
-    # --- 執行最終篩選 ---
-    final_filtered_shops = {}
+    # --- 執行最終篩選邏輯 ---
     
-    # 1. 執行地區篩選
-    if main_filter_key == "所有區域":
-        temp_shops = SHOPS_DB
-    else:
-        temp_shops = {k: v for k, v in SHOPS_DB.items() if v['region'].startswith(main_filter_key)}
+    # 1. 執行地區篩選 (只篩選淡水區內的社區)
+    temp_shops = {k: v for k, v in SHOPS_DB.items() if v['region'].startswith(TAMKANG_PREFIX)}
         
-        sub_filter_key = clean_region_name(selected_sub_region)
+    sub_filter_key = clean_region_name(selected_sub_region)
         
-        if sub_filter_key != "所有社區":
-            full_filter_string = f"{main_filter_key} - {sub_filter_key}"
-            temp_shops = {k: v for k, v in temp_shops.items() if v['region'] == full_filter_string}
+    if sub_filter_key != "所有社區":
+        # 按完整的 [行政區 - 社區名] 進行篩選 (這裡的行政區固定為 TAMKANG_PREFIX)
+        full_filter_string = f"{TAMKANG_PREFIX} - {sub_filter_key}"
+        temp_shops = {k: v for k, v in temp_shops.items() if v['region'] == full_filter_string}
 
     # 2. 執行價格篩選
     min_b, max_b = budget_range
@@ -448,26 +443,27 @@ else:
     }
 
     
-    if not final_filtered_shops and main_filter_key != "所有區域":
-        with col_filter_4:
-            st.warning(f"🚨 警告：選定區域 **{main_filter_key}** 下找不到店家。")
+    if not final_filtered_shops:
+        with col_filter_3:
+            st.warning(f"🚨 警告：選定條件下找不到店家。")
     
     
-    # 移除地圖顯示
-    with col_filter_4:
+    # 顯示店家計數
+    with col_filter_3:
         st.caption(f"目前顯示 {len(final_filtered_shops)} 個店家。")
 
     st.divider()
 
     # --- 顯示人潮多寡列表與連動選擇 (ST.BUTTON) ---
     
-    st.subheader("📊 即時人潮狀態一覽 (點擊卡片選擇店家)")
+    st.subheader("📊 即時剩食清單 (點擊卡片領取)")
     
     shops_with_status = []
     for name, info in final_filtered_shops.items():
         status = get_shop_status(name, info, ORDERS_DF)
         shops_with_status.append({'name': name, 'info': info, 'status': status})
     
+    # 排序邏輯：不可用 < 排隊模式 < 剩食模式 (保持不變)
     shops_with_status.sort(key=lambda x: (
         not x['status']['is_available'], 
         x['status']['is_queue_mode'],    
@@ -477,7 +473,7 @@ else:
     # 顯示列表
     cols_per_row = 3
     if len(shops_with_status) == 0:
-        st.info(f"在選定的區域和預算範圍內沒有找到任何店家。")
+        st.info(f"在選定的社區和預算範圍內沒有找到任何店家。")
     else:
         cols = st.columns(cols_per_row)
         
@@ -537,7 +533,7 @@ else:
     if st.session_state['target_shop_select'] and st.session_state['target_shop_select'] in final_filtered_shops:
         target_shop_name = st.session_state['target_shop_select']
         
-        st.subheader(f"🛒 立即排隊/搶購 - {target_shop_name}")
+        st.subheader(f"🛒 立即領取/排隊 - {target_shop_name}")
         info = final_filtered_shops[target_shop_name]
         status = get_shop_status(target_shop_name, info, ORDERS_DF)
         
@@ -546,7 +542,7 @@ else:
             
             u_name = st.text_input("輸入您的暱稱 (作為取餐/叫號依據)", key="u_name_detail")
             
-            btn_txt = "🚪 領取號碼牌 (排隊)" if status['is_queue_mode'] else "🚀 立即搶購 (剩食)"
+            btn_txt = "🚪 領取號碼牌 (排隊)" if status['is_queue_mode'] else "🚀 立即領取 (剩食)"
             
             user_has_order = False
             if not ORDERS_DF.empty:
@@ -574,7 +570,7 @@ else:
                                 ]
                                 ws_orders.append_row(new_order_row, value_input_option='USER_ENTERED')
                                 
-                                st.success(f"下單成功！請前往 {target_shop_name} 取餐。")
+                                st.success(f"領取成功！請前往 {target_shop_name} 取餐。")
                                 st.balloons()
                                 st.cache_data.clear()
                                 st.session_state['target_shop_select'] = None 
@@ -589,9 +585,5 @@ else:
         else:
             st.warning(f"{target_shop_name} 目前已售完或休息中。")
             
-    elif st.session_state['target_shop_select'] and st.session_state['target_shop_select'] not in final_filtered_shops:
-        st.warning("您選擇的店家不在當前篩選結果中，請重新選擇。")
-        st.session_state['target_shop_select'] = None
-    
     else:
-        st.info("⬆️ 請在上方列表點擊卡片選擇店家，進行下單或排隊。")
+        st.info("⬆️ 請在上方列表點擊卡片選擇店家，進行領取/排隊。")
