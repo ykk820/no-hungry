@@ -100,32 +100,6 @@ def delete_order(idx):
             return False
     return False
 
-# --- 啟用/停用店家功能 (關閉合作) ---
-def update_shop_status(shop_name, new_status):
-    client = get_client()
-    if not client:
-        st.error("更新失敗：無法連線至數據庫。")
-        return False
-    
-    try:
-        ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
-        cell = ws.find(shop_name, in_column=1) 
-        if cell is None:
-            st.error("更新失敗：數據庫中找不到該店名。")
-            return False
-        
-        # ⚠️ 假設 '狀態' 在第 9 欄 (I 欄)
-        ws.update_cell(cell.row, 9, new_status) 
-        
-        st.success(f"🚨 {shop_name} 的合作狀態已更新為 **{new_status}**。")
-        st.cache_data.clear() 
-        st.rerun()
-        return True
-
-    except Exception as e:
-        st.error(f"更新失敗：寫入數據庫時發生錯誤 ({e})。")
-        return False
-
 # --- 簡化後的店家新增函式 (只傳遞核心數據) ---
 def add_shop_to_sheet(data):
     
@@ -408,10 +382,12 @@ else:
                 if submitted:
                     
                     # 修正：確保取得的是 selectbox 或 text_input 的值
-                    if all_existing_regions:
+                    if 'new_region_select' not in st.session_state and 'new_region_manual' in st.session_state:
+                         submitted_region = st.session_state['new_region_manual']
+                    elif 'new_region_select' in st.session_state:
                          submitted_region = st.session_state['new_region_select']
                     else:
-                         submitted_region = st.session_state['new_region_manual']
+                         submitted_region = ""
                          
                     cleaned_region_name = clean_region_name(submitted_region)
                     
@@ -423,11 +399,11 @@ else:
                         # 執行寫入
                         add_shop_to_sheet({
                             "shop_name": new_shop_name,
-                            "region": cleaned_region_name, 
+                            "region": cleaned_region_name, # 自由輸入的地區名
                             "item": new_item,
                             "price": new_price,
                             "stock": new_stock,
-                            "mode": new_mode, 
+                            "mode": new_mode, # 固定為剩食
                         })
             
             # 🚀 快速進入商家後台 
@@ -557,13 +533,11 @@ else:
 
     
     if not final_filtered_shops:
-        with col_filter_3:
-            st.warning(f"🚨 警告：選定條件下找不到剩食。")
+        st.warning(f"🚨 警告：選定條件下找不到剩食。")
     
     
     # 顯示店家計數
-    with col_filter_3:
-        st.caption(f"目前顯示 {len(final_filtered_shops)} 個店家。")
+    st.caption(f"目前顯示 {len(final_filtered_shops)} 個店家。")
 
     st.divider()
 
