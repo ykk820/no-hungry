@@ -9,6 +9,7 @@ import uuid
 # --- 新增 geopy 函式庫 ---
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError 
+from datetime import datetime # 用於訂單寫入
 
 # ==========================================
 # 0. 設置唯一身份識別碼 (UUID)
@@ -102,11 +103,10 @@ def delete_order(idx):
     return False
 
 # --- FIX: Nominatim Geocoding 服務函式 (無需 Key) ---
-@st.cache_data(ttl=3600) # 緩存定位結果一小時
+@st.cache_data(ttl=3600) 
 def geocode_with_nominatim(address):
     """使用 OpenStreetMap Nominatim 服務將地址轉換為經緯度"""
     try:
-        # 使用一個唯一的 User-Agent 名稱，避免被服務器拒絕
         geolocator = Nominatim(user_agent="No_Hungry_App_Taiwan")
         location = geolocator.geocode(address, timeout=10) 
         
@@ -128,7 +128,6 @@ def add_shop_to_sheet(data):
     
     # 1. 執行 Geocoding
     st.info(f"正在使用 OpenStreetMap 服務定位地址: {data['address']}...")
-    # FIX: 呼叫 Nominatim 定位函式
     lat, lon, message = geocode_with_nominatim(data['address'])
     
     if lat is None:
@@ -513,18 +512,18 @@ else:
                         if user_is_in_queue:
                             st.success(f"🎉 **您排在 {my_queue_number} 號！**")
                             
-                        if status['is_available']:
-                            # FIX: 確保 st.form_submit_button 縮排正確，完全在 with st.container 和 with cols 內
-                            if st.form_submit_button(
-                                f"選擇 {name} 進行下單", 
-                                type="primary" if st.session_state['target_shop_select'] != name else "secondary",
-                                use_container_width=True,
-                                key=f"select_btn_{name}" 
-                            ):
-                                st.session_state['target_shop_select'] = name
-                                
-                        else:
-                            st.button("休息中 / 已售完", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
+                    # --- FIX: 將 st.form_submit_button 移到 with st.container 結束後，確保它位於 with cols 和 with st.form 內 ---
+                    if status['is_available']:
+                        if st.form_submit_button(
+                            f"選擇 {name} 進行下單", 
+                            type="primary" if st.session_state['target_shop_select'] != name else "secondary",
+                            use_container_width=True,
+                            key=f"select_btn_{name}" 
+                        ):
+                            st.session_state['target_shop_select'] = name
+                            
+                    else:
+                        st.button("休息中 / 已售完", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
             
         shop_selected_by_click = False
         for shop in shops_with_status:
@@ -568,26 +567,30 @@ else:
                         try:
                             full_item = f"{target_shop_name} - {info['item']}"
                             
-                            # 注意：此處是訂單寫入邏輯的 placeholder。
-                            # 由於 GAS URL 已被移除，這裡的 requests.post 將會失敗！
-                            # 為了不中斷應用，您必須將訂單寫入邏輯轉為 gspread.append_row 
-                            # 寫入 "領取紀錄" 工作表。
-                            st.error("警告：訂單寫入邏輯需要修改！請將此處的 requests.post 替換為 gspread.append_row 寫入 '領取紀錄' 工作表。")
-                            
-                            # 示例 (需手動引入 datetime，並確保 client 可用):
-                            # from datetime import datetime
-                            # client = get_client() 
-                            # ws_orders = client.open_by_key(SPREADSHEET_ID).worksheet("領取紀錄")
-                            # new_order_row = [datetime.now().strftime('%Y-%m-%d %H:%M:%S'), st.session_state['user_uuid'], u_name, target_shop_name, full_item]
-                            # ws_orders.append_row(new_order_row)
-                            
-                            st.success(f"下單成功！請前往 {target_shop_name} 取餐。")
-                            st.balloons()
-                            st.cache_data.clear()
-                            st.session_state['target_shop_select'] = None 
-                            st.rerun()
-                        except: 
-                            st.error("連線失敗")
+                            # 警告：此處的訂單寫入邏輯需要修正！
+                            # 由於我們不再使用外部 API (GAS) 處理訂單，必須使用 gspread 寫入「領取紀錄」
+                            client = get_client()
+                            if client:
+                                ws_orders = client.open_by_key(SPREADSHEET_ID).worksheet("領取紀錄")
+                                new_order_row = [
+                                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 
+                                    st.session_state['user_uuid'], 
+                                    u_name, 
+                                    target_shop_name, 
+                                    full_item
+                                ]
+                                ws_orders.append_row(new_order_row, value_input_option='USER_ENTERED')
+                                
+                                st.success(f"下單成功！請前往 {target_shop_name} 取餐。")
+                                st.balloons()
+                                st.cache_data.clear()
+                                st.session_state['target_shop_select'] = None 
+                                st.rerun()
+                            else:
+                                st.error("無法連線至 Google Sheet 處理訂單，請檢查權限設定。")
+
+                        except Exception as e: 
+                            st.error(f"訂單處理失敗: {e}")
                 else: st.warning("請輸入名字")
 
         else:
