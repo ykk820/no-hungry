@@ -1,15 +1,12 @@
 import streamlit as st
-import requests
+import requests # 必須用於呼叫內政部API
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import urllib.parse
 import time
 import uuid 
-# --- 新增 geopy 函式庫 ---
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderServiceError 
-from datetime import datetime # 用於訂單寫入
+from datetime import datetime 
 
 # ==========================================
 # 0. 設置唯一身份識別碼 (UUID)
@@ -20,7 +17,6 @@ if 'user_uuid' not in st.session_state:
 # ==========================================
 # 1. 系統全域設定 
 # ==========================================
-# FIX: 移除 GAS_URL，直接在 Streamlit 內處理 Geocoding 和寫入
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
@@ -102,34 +98,44 @@ def delete_order(idx):
         except: return False
     return False
 
-# --- Nominatim Geocoding 服務函式 (無需 Key) ---
-@st.cache_data(ttl=3600) # 緩存定位結果一小時
-def geocode_with_nominatim(address):
-    """使用 OpenStreetMap Nominatim 服務將地址轉換為經緯度"""
+# --- FIX: 內政部 Geocoding 服務函式 (最適合台灣地址) ---
+@st.cache_data(ttl=3600) 
+def geocode_with_taiwan_gov(address):
+    """使用內政部國土測繪中心 Geocoding API 將地址轉換為經緯度"""
+    # 這是國土測繪中心提供的一個已知可靠的 Geocoding API 端點
+    URL = "https://apim.nlsc.gov.tw/geo/api/geocoding" 
+    params = {
+        'address': address,
+        'format': 'json'
+    }
+    
     try:
-        geolocator = Nominatim(user_agent="No_Hungry_App_Taiwan")
-        location = geolocator.geocode(address, timeout=10) 
+        response = requests.get(URL, params=params, timeout=10)
+        response.raise_for_status() # 檢查 HTTP 錯誤
+        data = response.json()
         
-        if location:
-            return location.latitude, location.longitude, "定位成功"
+        # 檢查 NLSC API 的回應結構
+        if data.get('features') and len(data['features']) > 0:
+            coords = data['features'][0]['geometry']['coordinates']
+            # NLSC API 回傳的是 [經度, 緯度] (Lon, Lat) 格式
+            lon, lat = coords[0], coords[1]
+            return lat, lon, "定位成功 (內政部)"
         else:
-            return None, None, "錯誤：找不到地址的定位結果"
+            return None, None, "錯誤：內政部API找不到地址"
             
-    except GeocoderTimedOut:
-        return None, None, "錯誤：定位服務超時，請重試"
-    except GeocoderServiceError as e:
-        return None, None, f"錯誤：定位服務無法連線 ({e})"
+    except requests.exceptions.RequestException as e:
+        return None, None, f"錯誤：內政部API呼叫失敗 ({str(e)})"
     except Exception as e:
-        return None, None, f"定位 API 呼叫失敗: {str(e)}"
+        return None, None, f"錯誤：解析內政部API回應失敗 ({str(e)})"
 
 
 # --- 重構 add_shop_to_sheet (直接在 Streamlit 內處理定位與寫入) ---
 def add_shop_to_sheet(data):
     
     # 1. 執行 Geocoding
-    st.info(f"正在使用 OpenStreetMap 服務定位地址: {data['address']}...")
-    # FIX: 呼叫 Nominatim 定位函式
-    lat, lon, message = geocode_with_nominatim(data['address'])
+    st.info(f"正在使用臺灣內政部服務定位地址: {data['address']}...")
+    # FIX: 呼叫臺灣內政部 Geocoding 函式
+    lat, lon, message = geocode_with_taiwan_gov(data['address'])
     
     if lat is None:
         st.error(f"店家新增失敗。定位錯誤訊息: {message}")
@@ -302,7 +308,7 @@ else:
             new_region_options = ["新增區域..."] + region_options_base
             
             st.subheader("➕ 一鍵新增店家 (標準化區域)")
-            st.caption("**使用 OpenStreetMap 進行定位 (無需 Key)**")
+            st.caption("**使用臺灣內政部 Geocoding 進行定位 (無需 Key)**")
             st.caption("建議選擇清單中的標準化區域名稱")
             with st.form("add_shop_form"):
                 col_a, col_b = st.columns(2)
@@ -311,7 +317,7 @@ else:
                     new_item = st.text_input("商品名*", key="new_item", value="剩食套餐")
                     new_price = st.number_input("價格*", min_value=1, value=50)
                 with col_b:
-                    new_address = st.text_input("完整地址*", key="new_address", help="範例：新北市淡水區英專路15號 (將用於自動定位)")
+                    new_address = st.text_input("完整地址*", key="new_address", help="範例：新北市淡水區英專路15號 (請務必輸入完整地址，以利定位成功)")
                     
                     selected_region_input = st.selectbox(
                         "選擇或輸入區域*", 
@@ -364,14 +370,17 @@ else:
                 
             st.divider()
             st.subheader("📱 產生 QR Code")
-            qr_shop = st.selectbox("選擇店家 (QR Code)", list(SHOPS_DB.keys()))
-            # FIX: 確保 qr_shop 是字串且非 None，避免 TypeError
-            if qr_shop: 
-                shop_link = f"{BASE_APP_URL}/?mode=shop&name={urllib.parse.quote(str(qr_shop))}" 
-                st.image(f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}")
-                st.code(shop_link)
+            # FIX: 增加數據存在性檢查，避免 NameError/TypeError
+            if SHOPS_DB:
+                qr_shop = st.selectbox("選擇店家 (QR Code)", list(SHOPS_DB.keys()))
+                if qr_shop: 
+                    shop_link = f"{BASE_APP_URL}/?mode=shop&name={urllib.parse.quote(str(qr_shop))}" 
+                    st.image(f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}")
+                    st.code(shop_link)
+                else:
+                    st.caption("無法生成 QR Code：店家名稱為空。")
             else:
-                st.caption("請先確保您的 Google Sheet 中有店家資料。")
+                st.caption("請先在 Google Sheet 中新增店家資料。")
 
             if st.button("清除快取"):
                 st.cache_data.clear()
@@ -483,6 +492,8 @@ else:
         st.info(f"在 **{st.session_state['selected_region']}** 區域內沒有找到任何店家。")
     else:
         cols = st.columns(cols_per_row)
+        
+        # --- 移除 st.form，使用 st.button + st.rerun 實現連動 ---
         
         for i, shop in enumerate(shops_with_status):
             name = shop['name']
