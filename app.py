@@ -1,12 +1,10 @@
 import streamlit as st
-import requests # 必須用於呼叫內政部API
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import urllib.parse
-import time
+from datetime import datetime
 import uuid 
-from datetime import datetime 
 
 # ==========================================
 # 0. 設置唯一身份識別碼 (UUID)
@@ -17,11 +15,10 @@ if 'user_uuid' not in st.session_state:
 # ==========================================
 # 1. 系統全域設定 
 # ==========================================
-# FIX: 移除 GAS_URL，直接在 Streamlit 內處理 Geocoding 和寫入
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
-# --- 新增：淡江大學周邊的建議/標準化區域名稱 ---
+# --- 區域標準化名稱 (可視為淡水地區的標準化群組) ---
 SUGGESTED_REGIONS = [
     '淡江大學',
     '金雞母/水源街',
@@ -99,89 +96,34 @@ def delete_order(idx):
         except: return False
     return False
 
-# --- FIX: 內政部 Geocoding 服務函式 (更換穩定網址) ---
-@st.cache_data(ttl=3600) 
-def geocode_with_taiwan_gov(address):
-    """使用內政部國土測繪中心 Geocoding API 將地址轉換為經緯度"""
-    # FIX: 將網址更換為另一組可靠的 API 服務網址
-    URL = "https://ap.nlsc.gov.tw/api/AddressGeocoding/json" 
-    params = {
-        'address': address
-    }
-    
-    try:
-        response = requests.get(URL, params=params, timeout=10)
-        response.raise_for_status() # 檢查 HTTP 錯誤
-        data = response.json()
-        
-        # 檢查新的 API 回應結構 (這組 API 回應通常比較簡潔)
-        if data and data.get('Status') == 200 and data.get('TWD97_X') and data.get('TWD97_Y'):
-            # 注意：此 API 回傳的 TWD97 X/Y 坐標不是 WGS84 經緯度，需要進一步轉換！
-            # 由於轉換過程複雜，且此 API 可能需要額外的參數，我們將切回最穩定的 GeoJSON 格式端點
-            
-            # --- 最終回退到一個更為通用的 GeoJSON 端點（避免坐標系轉換問題） ---
-            # 重新使用原始端點，但假設問題是暫時的，或使用另一個公共端點
-            
-            # 由於錯誤是 NameResolutionError (DNS)，這可能是暫時性問題。 
-            # 為了穩定，我將使用另一個已知的公共查詢 API：
-            URL = "https://ap.nlsc.gov.tw/publicAccess/geo/geocoding/json"
-            params = {
-                'address': address
-            }
-            
-            response = requests.get(URL, params=params, timeout=10)
-            response.raise_for_status() 
-            data = response.json()
-            
-            if data and data.get('result') and data['result'].get('addressList'):
-                first_result = data['result']['addressList'][0]
-                lat = first_result['y']
-                lon = first_result['x']
-                return lat, lon, "定位成功 (公共查詢服務)"
-            else:
-                return None, None, "錯誤：API找不到地址 (請檢查地址是否完整)"
-            
-    except requests.exceptions.RequestException as e:
-        return None, None, f"錯誤：API呼叫失敗 ({str(e)}) - 網路問題或網址不正確。"
-    except Exception as e:
-        return None, None, f"錯誤：解析API回應失敗 ({str(e)})"
+# --- 移除 Geocoding 相關函式 (不再需要) ---
 
-
-# --- 重構 add_shop_to_sheet (直接在 Streamlit 內處理定位與寫入) ---
+# --- 簡化後的店家新增函式 (不再自動定位) ---
 def add_shop_to_sheet(data):
     
-    # 1. 執行 Geocoding
-    st.info(f"正在使用臺灣內政部服務定位地址: {data['address']}...")
-    # FIX: 呼叫臺灣內政部 Geocoding 函式
-    lat, lon, message = geocode_with_taiwan_gov(data['address'])
-    
-    if lat is None:
-        st.error(f"店家新增失敗。定位錯誤訊息: {message}")
-        return False
-        
     client = get_client()
     if not client:
         st.error("店家新增失敗。無法連線至 Google Sheets (請檢查 GCP 服務帳戶金鑰)")
         return False
 
-    # 2. 準備寫入資料 (順序必須與 Google Sheet 欄位一致)
+    # 準備寫入資料 (注意：管理員必須手動提供經緯度，或 Sheet 中已預設 0, 0)
     new_row = [
         data['shop_name'], 
         data['region'], 
         data['mode'], 
-        lat, # 定位後的緯度
-        lon, # 定位後的經度
+        data['lat'], # 緯度
+        data['lon'], # 經度
         data['item'], 
         data['price'], 
         data['stock']
     ]
 
-    # 3. 執行寫入
+    # 執行寫入
     try:
         ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
         ws.append_row(new_row, value_input_option='USER_ENTERED')
         
-        st.success(f"✅ 店家 **{data['shop_name']}** 新增成功！(經緯度: {lat}, {lon})")
+        st.success(f"✅ 店家 **{data['shop_name']}** 新增成功！")
         st.balloons()
         st.cache_data.clear() # 清除快取，讓新資料立即顯示
         st.rerun()
@@ -222,7 +164,7 @@ def get_shop_status(shop_name, shop_info, orders_df):
 # ==========================================
 # 3. 頁面開始
 # ==========================================
-st.set_page_config(page_title="餓不死地圖", page_icon="🍱", layout="wide")
+st.set_page_config(page_title="餓不死清單", page_icon="🍱", layout="wide") # 更改頁面標題
 
 SHOPS_DB, ALL_ORDERS = load_data()
 
@@ -325,9 +267,8 @@ else:
             region_options_base = sorted(list(set(SUGGESTED_REGIONS + all_regions)))
             new_region_options = ["新增區域..."] + region_options_base
             
-            st.subheader("➕ 一鍵新增店家 (標準化區域)")
-            st.caption("**使用臺灣內政部 Geocoding 進行定位 (無需 Key)**")
-            st.caption("建議選擇清單中的標準化區域名稱")
+            st.subheader("➕ 一鍵新增店家 (手動輸入坐標)")
+            st.caption("請先手動查詢並輸入精確的經緯度")
             with st.form("add_shop_form"):
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -335,16 +276,19 @@ else:
                     new_item = st.text_input("商品名*", key="new_item", value="剩食套餐")
                     new_price = st.number_input("價格*", min_value=1, value=50)
                 with col_b:
-                    new_address = st.text_input("完整地址*", key="new_address", help="範例：新北市淡水區英專路15號 (請務必輸入完整地址，以利定位成功)")
-                    
+                    # ⚠️ 移除地址定位，改為手動輸入經緯度
+                    new_lat = st.number_input("緯度 (Lat)*", value=23.9738, help="例如: 23.9738 (台灣地理中心)")
+                    new_lon = st.number_input("經度 (Lon)*", value=120.9756, help="例如: 120.9756")
+
                     selected_region_input = st.selectbox(
                         "選擇或輸入區域*", 
                         new_region_options, 
                         index=new_region_options.index("新增區域...") if "新增區域..." in new_region_options else 0
                     )
                     
+                    # ⚠️ 移除預設值，讓使用者輸入
                     if selected_region_input == "新增區域...":
-                        new_region = st.text_input("輸入新區域名稱", key="new_region_manual", value="淡江大學")
+                        new_region = st.text_input("輸入新區域名稱", key="new_region_manual", value="") 
                     else:
                         new_region = selected_region_input
                         
@@ -353,30 +297,30 @@ else:
                 new_mode_options = ['剩食', '排隊']
                 new_mode = st.selectbox("營運模式", new_mode_options, index=new_mode_options.index('剩食'))
                 
-                submitted = st.form_submit_button("✅ 新增並定位 (直接寫入 Sheet)")
+                submitted = st.form_submit_button("✅ 新增店家 (直接寫入 Sheet)")
                 
                 # --- 呼叫 Streamlit 內建的寫入邏輯 ---
                 if submitted:
                     cleaned_region_name = clean_region_name(new_region)
-                    if not all([new_shop_name, new_address, cleaned_region_name]):
-                        st.error("店名、地址和區域不可為空！")
+                    if not all([new_shop_name, cleaned_region_name]): # 檢查必要的欄位
+                        st.error("店名、區域不可為空！")
                     else:
-                        # 執行定位和寫入
+                        # 執行寫入
                         add_shop_to_sheet({
                             "shop_name": new_shop_name,
-                            "address": new_address,
                             "region": cleaned_region_name, 
                             "item": new_item,
                             "price": new_price,
                             "stock": new_stock,
-                            "mode": new_mode
+                            "mode": new_mode,
+                            "lat": new_lat, # 傳入緯度
+                            "lon": new_lon  # 傳入經度
                         })
             
-            # 🚀 快速進入商家後台 (Line 345 附近的修正)
+            # 🚀 快速進入商家後台 
             st.divider()
             st.subheader("🚀 快速進入商家後台")
             
-            # FIX: 增加數據存在性檢查，避免 NameError
             if SHOPS_DB:
                 target_shop_admin = st.selectbox("選擇要管理的店家", list(SHOPS_DB.keys()))
                 if st.button("進入該店後台"):
@@ -388,7 +332,6 @@ else:
                 
             st.divider()
             st.subheader("📱 產生 QR Code")
-            # FIX: 增加數據存在性檢查，避免 NameError/TypeError
             if SHOPS_DB:
                 qr_shop = st.selectbox("選擇店家 (QR Code)", list(SHOPS_DB.keys()))
                 if qr_shop: 
@@ -406,33 +349,22 @@ else:
 
 
     # --- 主畫面 (Consumer Logic) ---
-    st.title("🍱 餓不死地圖")
+    st.title("🍱 餓不死清單") # 更改標題
     st.info(f"您的唯一ID：{st.session_state['user_uuid'][:8]}... | 此ID用於防範棄單。")
     
     if not SHOPS_DB:
         st.warning("⚠️ 無法讀取店家資料，請檢查 Google Sheet 設定。")
         st.stop()
 
-    # --- 篩選器與狀態管理 ---
-    all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
-    default_region_index = 0
-    
-    if "淡江大學" in all_regions:
-         default_region_index = all_regions.index("淡江大學") + 1 
-
-    if 'selected_region' not in st.session_state:
-        st.session_state['selected_region'] = "所有區域"
-    if 'target_shop_select' not in st.session_state:
-        st.session_state['target_shop_select'] = None
-    
     # --- 篩選器 ---
     col_filter_1, col_filter_2 = st.columns([1, 4])
 
     with col_filter_1:
+        # ⚠️ 預設為 '所有區域' (index 0)
         selected_region = st.selectbox(
             "📍 請選擇區域", 
-            ["所有區域"] + all_regions,
-            index=default_region_index,
+            ["所有區域"] + sorted(list(set([v['region'] for v in SHOPS_DB.values()]))),
+            index=0,
             key="region_selectbox",
             on_change=lambda: st.session_state.update(
                 selected_region=st.session_state.region_selectbox,
@@ -440,11 +372,7 @@ else:
             )
         )
         
-        # --- 數據驗證區塊 (Sheet 連結 Map) ---
-        with st.expander("🔬 檢查地圖數據"):
-             st.caption("顯示地圖上正在使用的店家資料")
-             show_data_map = st.checkbox("顯示原始地圖數據", value=False)
-
+        # ⚠️ 移除數據驗證區塊 (與地圖相關)
 
     cleaned_selected_region = clean_region_name(st.session_state['selected_region'])
 
@@ -456,36 +384,10 @@ else:
     if not filtered_shops and cleaned_selected_region != "所有區域":
         st.warning(f"🚨 警告：選定區域 **{st.session_state['selected_region']}** 下找不到店家。請檢查 Google Sheet 中的地區名稱是否完全一致。")
     
-    # --- 地圖顯示 ---
-    
-    map_df = pd.DataFrame([
-        {'shop_name': k, 'lat': v['lat'], 'lon': v['lon']} for k, v in filtered_shops.items()
-    ])
-    
-    center_lat = 23.6 
-    center_lon = 120.9
-    map_zoom = 7 
-    
-    if not map_df.empty:
-        if cleaned_selected_region != "所有區域":
-            center_lat = map_df['lat'].mean()
-            center_lon = map_df['lon'].mean()
-            map_zoom = 14 
-        else:
-            center_lat = map_df['lat'].mean()
-            center_lon = map_df['lon'].mean()
-
+    # ⚠️ 移除地圖顯示，改為純列表
     with col_filter_2:
-        st.map(
-            map_df, 
-            latitude=center_lat, 
-            longitude=center_lon, 
-            zoom=map_zoom, 
-            use_container_width=True
-        )
-        # --- 在地圖旁顯示數據驗證表 ---
-        if show_data_map and not map_df.empty:
-            st.dataframe(map_df, use_container_width=True, height=200)
+        st.caption("請在左側選單篩選區域，下方查看店家清單。")
+        # 移除 st.map() 呼叫
 
     st.divider()
 
@@ -548,7 +450,6 @@ else:
                             
                 # 2. 顯示按鈕 (使用普通的 st.button)
                 if status['is_available']:
-                    # 使用 lambda 函式來定義點擊行為 (設置 session state 並強制 rerun)
                     if st.button(
                         f"選擇 {name} 進行下單", 
                         type="primary" if st.session_state['target_shop_select'] != name else "secondary",
@@ -625,4 +526,4 @@ else:
         st.session_state['target_shop_select'] = None
     
     else:
-        st.info("⬆️ 請在上方地圖下方點擊卡片選擇店家，進行下單或排隊。")
+        st.info("⬆️ 請在上方列表點擊卡片選擇店家，進行下單或排隊。")
