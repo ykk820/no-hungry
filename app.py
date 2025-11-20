@@ -25,7 +25,7 @@ if 'admin_share_percent' not in st.session_state:
 # ==========================================
 # 1. 系統全域設定 
 # ==========================================
-SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
+SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw" # ⚠️ 請更新為您的新 Sheet ID
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
 
@@ -33,9 +33,8 @@ BASE_APP_URL = "https://no-hungry.streamlit.app"
 # 2. 資料庫連線函式與服務 
 # ==========================================
 
-# --- 地區名稱清理函式 ---
 def clean_region_name(name):
-    """移除前後空白並替換常見的特殊空白符號，用於保證篩選比對成功"""
+    """確保地區名稱乾淨"""
     if isinstance(name, str):
         return name.strip().replace('\u3000', '').strip()
     return str(name).strip()
@@ -58,15 +57,13 @@ def load_data():
     try:
         ss = client.open_by_key(SPREADSHEET_ID)
         
-        # 1. 讀取店家 (FIX: 讀取欄位名稱修正為圖片所示)
+        # 1. 讀取店家 (假設 Sheet 結構已修正)
         try:
             ws_shops = ss.worksheet("店家設定")
             raw_shops = ws_shops.get_all_records()
             shops_db = {}
             for row in raw_shops:
                 name = str(row.get('店名', '')).strip()
-                # ⚠️ 注意：若 Sheet 中缺少 '模式', '狀態', '緯度', '經度' 欄位，它們會是空值或 None。
-                # 我們必須使用 row.get() 傳入預設值。
                 status = str(row.get('狀態', 'Active')).strip()
                 
                 if name and status.lower() == 'active': 
@@ -75,9 +72,9 @@ def load_data():
                     shops_db[name] = {
                         'region': cleaned_region, 
                         'mode': str(row.get('模式', '剩食')).strip(),
-                        'item': str(row.get('商品名稱', row.get('商品', '優惠商品'))), # 修正：優先使用'商品名稱'
-                        'price': int(row.get('價格', 0) or 0), # 修正：使用 '價格'
-                        'stock': int(row.get('初始庫存', 0) or 0), # 修正：使用 '初始庫存'
+                        'item': str(row.get('商品名稱', row.get('商品', '優惠商品'))), # 修正：使用 '商品名稱'
+                        'price': int(row.get('價格', 0) or 0), 
+                        'stock': int(row.get('初始庫存', 0) or 0) 
                     }
         except Exception: shops_db = {}
 
@@ -103,7 +100,7 @@ def delete_order(idx):
             return False
     return False
 
-# --- 簡化後的店家新增函式 (FIX: 修正寫入欄位順序和數量) ---
+# --- 簡化後的店家新增函式 (只傳遞核心數據) ---
 def add_shop_to_sheet(data):
     
     client = get_client()
@@ -111,38 +108,17 @@ def add_shop_to_sheet(data):
         st.error("店家新增失敗。無法連線至數據庫。")
         return False
 
-    # ⚠️ FIX: 寫入欄位順序和數量，只寫入 5 個核心欄位 + 4 個後台必需欄位
-    # 新順序 (根據您的 Sheet A-E 欄位): 地區, 店名, 價格, 初始庫存, 商品名稱
-    new_row = [
-        data['region'],      # 1. 地區
-        data['shop_name'],   # 2. 店名
-        data['price'],       # 3. 價格
-        data['stock'],       # 4. 初始庫存
-        data['item'],        # 5. 商品名稱
-        data['mode'],        # 6. 模式 (原代碼保留)
-        0,                   # 7. 緯度 (佔位)
-        0,                   # 8. 經度 (佔位)
-        'Active'             # 9. 狀態 (原代碼保留)
-    ]
-    # 如果您的 Sheet 只有 A-E 欄位 (5欄)，這裡寫入 9 欄會造成數據錯位。
-    # 我將假設您的 Sheet 依然保留了 9 個欄位，只是順序改變了，並按照數據庫的舊順序寫入。
-    # 由於不知道您的 '店家設定' 工作表到底有幾欄，我必須使用最安全的寫法：
-    
-    # 假設您的 Sheet 有以下欄位 (必須存在，否則數據會錯亂):
-    # A:地區, B:店名, C:價格, D:初始庫存, E:商品名稱, F:模式, G:緯度, H:經度, I:狀態
-    # 根據您的圖片，我們將採用 A:E 的順序，但必須確保 Gspread 寫入時找到正確的列。
-    # 最安全的寫法是讓 `append_row` 按照您的新順序 A, B, C, D, E 填入，並讓後台資料留空。
-    
+    # ⚠️ FIX: 寫入欄位順序和數量，以匹配您新的 Sheet 結構
     new_row_final = [
-        data['region'],      # A: 地區
-        data['shop_name'],   # B: 店名
-        data['price'],       # C: 價格
-        data['stock'],       # D: 初始庫存
-        data['item'],        # E: 商品名稱
-        data['mode'],        # F: 模式
-        0,                   # G: 緯度
-        0,                   # H: 經度
-        'Active'             # I: 狀態
+        data['region'],      # 1. 地區 (A)
+        data['shop_name'],   # 2. 店名 (B)
+        data['price'],       # 3. 價格 (C)
+        data['stock'],       # 4. 初始庫存 (D)
+        data['item'],        # 5. 商品名稱 (E)
+        data['mode'],        # 6. 模式 (F)
+        0,                   # 7. 經度 (G) - FIX: 寫入 0 經度
+        0,                   # 8. 緯度 (H) - FIX: 寫入 0 緯度
+        'Active'             # 9. 狀態 (I)
     ]
 
     # 執行寫入
@@ -152,25 +128,20 @@ def add_shop_to_sheet(data):
         
         st.success(f"✅ 店家 **{data['shop_name']}** 新增成功！")
         st.balloons()
-        st.cache_data.clear() # 清除快取，讓新資料立即顯示
+        st.cache_data.clear() # 清除快取
         st.rerun()
     except Exception:
         st.error("新增失敗，請檢查數據庫工作表名稱或權限。")
         return False
 
 def get_shop_status(shop_name, shop_info, orders_df):
-    if orders_df.empty or 'store' not in orders_df.columns:
-        queue_count = 0
-    else:
-        if 'store' in ORDERS_DF.columns:
-            shop_orders = ORDERS_DF[ORDERS_DF['store'] == shop_name].copy()
-            queue_count = len(shop_orders)
-        else:
-             queue_count = 0
+    
+    claimed_count = 0
+    if not orders_df.empty and 'store' in orders_df.columns:
+        shop_orders = orders_df[orders_df['store'] == shop_name].copy()
+        claimed_count = len(shop_orders)
 
-
-    is_queue_mode = False 
-    current_stock = shop_info['stock'] - queue_count
+    current_stock = shop_info['stock'] - claimed_count
     if current_stock < 0: current_stock = 0
 
     if current_stock > 0:
@@ -181,7 +152,7 @@ def get_shop_status(shop_name, shop_info, orders_df):
         is_available = False
         
     return {
-        'claimed_count': queue_count, 
+        'claimed_count': claimed_count, 
         'current_stock': current_stock,
         'is_available': is_available,
         'status_text': status_text,
@@ -241,8 +212,8 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
                             ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
                             cell = ws.find(shop_target, in_column=1) 
                             if cell:
-                                # 假設 '初始庫存' 在第 8 欄
-                                ws.update_cell(cell.row, 4, new_stock) # ⚠️ FIX: 假設 '初始庫存' 現在是第 4 欄 (D欄)
+                                # ⚠️ FIX: 假設 '初始庫存' 現在是第 4 欄 (D 欄)
+                                ws.update_cell(cell.row, 4, new_stock) 
                                 st.success(f"📦 總庫存已更新為 {new_stock} 份。")
                                 st.cache_data.clear() 
                                 st.rerun()
@@ -330,6 +301,8 @@ else:
                 shop_to_manage = st.selectbox("選擇要管理的店家", list(SHOPS_DB.keys()))
                 
                 status_opts = ["Active", "Inactive"]
+                
+                # 假設 Google Sheet 中 '狀態' 欄位是第 9 欄
                 new_status = st.selectbox("設定新狀態", status_opts, index=0) 
                 
                 if st.button("🔄 更新店家狀態", type="primary"):
@@ -373,7 +346,7 @@ else:
             
             # --- 管理員新增店家表單邏輯 ---
             st.subheader("➕ 新增店家")
-            st.caption("請務必在 Google Sheet 中填入正確的欄位名稱：地區, 店名, 價格, 初始庫存, 商品名稱。")
+            st.caption("請確保 Google Sheet 欄位順序為：地區, 店名, 價格, 初始庫存, 商品名稱, 模式, 經度, 緯度, 狀態。")
             with st.form("add_shop_form"):
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -382,7 +355,7 @@ else:
                     new_price = st.number_input("價格*", min_value=1, value=50) # 價格輸入
                 with col_b:
                     
-                    # --- FIX: 單一自由文字輸入地區名稱 ---
+                    # --- 單一自由文字輸入地區名稱 ---
                     new_region = st.text_input(
                         "地區名稱*", 
                         key="new_region_manual", 
@@ -468,7 +441,7 @@ else:
                     qr_img_url = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}"
                     
                     with qr_cols[i % 5]:
-                        st.markdown(f"**{name}** ({info['region'].split(' - ')[-1]})")
+                        st.markdown(f"**{name}**")
                         st.image(qr_img_url, caption=f"掃描進入看板", width=120)
                         st.caption(f"連結: [Link]({shop_link})")
                         st.write("---")
@@ -477,7 +450,7 @@ else:
                 st.session_state['show_bulk_qr'] = False
                 st.rerun()
 
-            st.stop() 
+            st.stop() # 停止執行後續的消費者介面
     # --- END 批量二維碼生成區塊 ---
 
 
@@ -497,7 +470,7 @@ else:
     
     
     with col_filter_1:
-        # Level 1: 單層地區篩選
+        # 地區篩選
         selected_region = st.selectbox(
             "📍 選擇地區", 
             ["所有地區"] + all_regions,
@@ -509,7 +482,7 @@ else:
         )
         
     with col_filter_2:
-        # Level 2: 預算區間篩選
+        # 預算區間篩選
         budget_range = st.slider(
             "💲 預算區間",
             min_value=min_price,
@@ -528,7 +501,6 @@ else:
     if selected_filter_key == "所有地區":
         temp_shops = SHOPS_DB
     else:
-        # 由於地區名稱是自由輸入的，必須使用精確匹配
         temp_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == selected_filter_key}
 
     # 2. 執行價格篩選
@@ -574,13 +546,13 @@ else:
         # 依地區分組顯示 (消費者介面)
         shops_by_region_consumer = {}
         for item in shops_with_status:
-            name = item[0] # name
-            info = item[1] # status_info
+            name = item[0]
+            info = item[1]
             region = info['region']
             if region not in shops_by_region_consumer:
-                shops_by_region_consumer[region] = []
+                shops_by_region_consumer[region] = {}
             
-            shops_by_region_consumer[region].append((name, info))
+            shops_by_region_consumer[region][name] = info
             
         sorted_regions_consumer = sorted(shops_by_region_consumer.keys())
         
@@ -589,7 +561,7 @@ else:
             
             cols = st.columns(cols_per_row)
             
-            for i, (name, info) in enumerate(shops_by_region_consumer[region_name]):
+            for i, (name, info) in enumerate(shops_by_region_consumer[region_name].items()):
                 
                 status = get_shop_status(name, info, ORDERS_DF)
                 
