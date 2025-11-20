@@ -1,5 +1,5 @@
 streamlit
 gspread
-google-auth
-oauth2client
+pandas
 requests
+geopy  # <<< 必須新增這一行
