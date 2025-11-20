@@ -29,12 +29,14 @@ SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw" # ⚠️ 請更�
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
 # --- 區域標準化名稱 (供管理員選擇) ---
+# FIX: 確保清單有正確的結束符號 ]
 SUGGESTED_REGIONS_FINAL = [
-    '大學城',
-    '金雞母',
-    '水源街',
-    '大田寮',
+    '新北市淡水區淡江大學',
+    '新北市淡水區金雞母/水源街',
+    '新北市淡水區大田寮',
+    '台北市大安區師大夜市',
     '新增自訂地區...'
+]
 
 
 # ==========================================
@@ -116,7 +118,7 @@ def add_shop_to_sheet(data):
         st.error("店家新增失敗。無法連線至數據庫。")
         return False
 
-    # 準備寫入資料 (順序必須嚴格匹配 Sheet 標題行: A:地區, B:店名, C:價格, D:初始庫存, E:商品名稱, F:模式, G:經度, H:緯度, I:狀態)
+    # 準備寫入資料 (Lat/Lon 欄位填 0)
     new_row_final = [
         data['region'],      # 1. 地區 (A)
         data['shop_name'],   # 2. 店名 (B)
@@ -361,16 +363,14 @@ else:
                     new_price = st.number_input("價格*", min_value=1, value=50) # 價格輸入
                 with col_b:
                     
-                    # --- FIX: 地區選單 (回歸標準化或自訂輸入) ---
-                    selected_region_input = st.selectbox(
-                        "選擇標準化地區", 
-                        ["新增自訂地區..."] + SUGGESTED_REGIONS_FULL,
+                    # --- FIX: 單一自由文字輸入地區名稱 ---
+                    # ⚠️ 移除選單，改為單一輸入
+                    new_region = st.text_input(
+                        "地區名稱*", 
+                        key="new_region_manual", 
+                        value="", 
+                        help="例如：新北市淡水區淡江大學 / 台北市信義區市政府"
                     )
-                    
-                    if selected_region_input == "新增自訂地區...":
-                        new_region = st.text_input("地區名稱*", key="new_region_manual", value="") 
-                    else:
-                        new_region = selected_region_input
 
                     new_stock = st.number_input("初始庫存", min_value=1, value=10)
                 
@@ -450,7 +450,7 @@ else:
                     qr_img_url = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}"
                     
                     with qr_cols[i % 5]:
-                        st.markdown(f"**{name}**")
+                        st.markdown(f"**{name}** ({info['region'].split(' - ')[-1]})")
                         st.image(qr_img_url, caption=f"掃描進入看板", width=120)
                         st.caption(f"連結: [Link]({shop_link})")
                         st.write("---")
@@ -478,10 +478,20 @@ else:
     all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
     
     
-    # ⚠️ FIX: 移除地區選擇框，改為只顯示預算篩選器
-    
-    # 將預算篩選器移動到 col_filter_1 的位置
     with col_filter_1:
+        # 地區篩選
+        selected_region = st.selectbox(
+            "📍 選擇地區", 
+            ["所有地區"] + all_regions,
+            index=0,
+            key="region_selectbox",
+            on_change=lambda: st.session_state.update(
+                target_shop_select=None 
+            )
+        )
+        
+    with col_filter_2:
+        # 預算區間篩選
         budget_range = st.slider(
             "💲 預算區間",
             min_value=min_price,
@@ -490,11 +500,19 @@ else:
             step=10,
             key="budget_range"
         )
-        
-    # 執行篩選邏輯 (只剩下價格篩選)
-    selected_filter_key = "所有地區" # 移除地區篩選
-    temp_shops = SHOPS_DB
+
+
+    # --- 執行最終篩選邏輯 ---
     
+    # 1. 執行地區篩選 (單層)
+    selected_filter_key = clean_region_name(selected_region)
+    
+    if selected_filter_key == "所有地區":
+        temp_shops = SHOPS_DB
+    else:
+        temp_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == selected_filter_key}
+
+    # 2. 執行價格篩選
     min_b, max_b = budget_range
     final_filtered_shops = {
         k: v for k, v in temp_shops.items() 
@@ -503,12 +521,12 @@ else:
 
     
     if not final_filtered_shops:
-        with col_filter_2:
+        with col_filter_3:
             st.warning(f"🚨 警告：選定條件下找不到剩食。")
     
     
     # 顯示店家計數
-    with col_filter_2:
+    with col_filter_3:
         st.caption(f"目前顯示 {len(final_filtered_shops)} 個店家。")
 
     st.divider()
@@ -538,7 +556,7 @@ else:
     # 顯示列表
     cols_per_row = 3
     if len(shops_with_status_sorted) == 0:
-        st.info(f"在選定的預算範圍內沒有找到任何剩食項目。")
+        st.info(f"在選定的地區和預算範圍內沒有找到任何剩食項目。")
     else:
         
         # 依地區分組顯示 (消費者介面)
@@ -601,6 +619,8 @@ else:
                         st.button("❌ 已領取完畢", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
             
     # --- 4. 詳細領取區塊 ---
+    
+    st.divider()
     
     if st.session_state['target_shop_select'] and st.session_state['target_shop_select'] in final_filtered_shops:
         target_shop_name = st.session_state['target_shop_select']
