@@ -71,8 +71,8 @@ def load_data():
                     
                     shops_db[name] = {
                         'region': cleaned_region, 
-                        'mode': str(row.get('模式', '剩食')).strip(),
-                        'item': str(row.get('商品名稱', row.get('商品', '優惠商品'))), # 修正：使用 '商品名稱'
+                        'mode': '剩食', 
+                        'item': str(row.get('商品名稱', row.get('商品', '優惠商品'))), 
                         'price': int(row.get('價格', 0) or 0), 
                         'stock': int(row.get('初始庫存', 0) or 0) 
                     }
@@ -108,7 +108,7 @@ def add_shop_to_sheet(data):
         st.error("店家新增失敗。無法連線至數據庫。")
         return False
 
-    # ⚠️ FIX: 寫入欄位順序和數量，以匹配您新的 Sheet 結構
+    # 準備寫入資料 (順序必須嚴格匹配 Sheet 標題行)
     new_row_final = [
         data['region'],      # 1. 地區 (A)
         data['shop_name'],   # 2. 店名 (B)
@@ -116,8 +116,8 @@ def add_shop_to_sheet(data):
         data['stock'],       # 4. 初始庫存 (D)
         data['item'],        # 5. 商品名稱 (E)
         data['mode'],        # 6. 模式 (F)
-        0,                   # 7. 經度 (G) - FIX: 寫入 0 經度
-        0,                   # 8. 緯度 (H) - FIX: 寫入 0 緯度
+        0,                   # 7. 經度 (G)
+        0,                   # 8. 緯度 (H)
         'Active'             # 9. 狀態 (I)
     ]
 
@@ -162,7 +162,7 @@ def get_shop_status(shop_name, shop_info, orders_df):
 # ==========================================
 # 3. 頁面開始
 # ==========================================
-st.set_page_config(page_title="餓不死清單", page_icon="🍱", layout="wide") 
+st.set_page_config(page_title="剩食超人", page_icon="🍱", layout="wide") 
 
 SHOPS_DB, ALL_ORDERS = load_data()
 
@@ -182,7 +182,6 @@ shop_target = params.get("name", None)
 if current_mode == "shop" and shop_target in SHOPS_DB:
     
     shop_info = SHOPS_DB[shop_target]
-    is_queue_mode = False
     
     with st.sidebar:
         st.title(f"🏪 {shop_target}")
@@ -212,7 +211,7 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
                             ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
                             cell = ws.find(shop_target, in_column=1) 
                             if cell:
-                                # ⚠️ FIX: 假設 '初始庫存' 現在是第 4 欄 (D 欄)
+                                # ⚠️ 初始庫存是 D 欄 (第 4 欄)
                                 ws.update_cell(cell.row, 4, new_stock) 
                                 st.success(f"📦 總庫存已更新為 {new_stock} 份。")
                                 st.cache_data.clear() 
@@ -227,7 +226,7 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
                     st.warning("庫存數量未改變。")
         # --- FIX END ---
 
-    st.title(f"📊 實時剩食看板 - {shop_target}")
+    st.title(f"📊 剩食看板 - {shop_target}")
     
     if st.button("🔄 刷新數據"):
         st.cache_data.clear()
@@ -302,7 +301,6 @@ else:
                 
                 status_opts = ["Active", "Inactive"]
                 
-                # 假設 Google Sheet 中 '狀態' 欄位是第 9 欄
                 new_status = st.selectbox("設定新狀態", status_opts, index=0) 
                 
                 if st.button("🔄 更新店家狀態", type="primary"):
@@ -441,7 +439,7 @@ else:
                     qr_img_url = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}"
                     
                     with qr_cols[i % 5]:
-                        st.markdown(f"**{name}**")
+                        st.markdown(f"**{name}** ({info['region'].split(' - ')[-1]})")
                         st.image(qr_img_url, caption=f"掃描進入看板", width=120)
                         st.caption(f"連結: [Link]({shop_link})")
                         st.write("---")
@@ -482,12 +480,12 @@ else:
         )
         
     with col_filter_2:
-        # 預算區間篩選
+        # 預算區間篩選 (FIX: 預設值 50-100)
         budget_range = st.slider(
             "💲 預算區間",
             min_value=min_price,
             max_value=max_price,
-            value=(min_price, max_price),
+            value=(min(50, max_price), min(100, max_price)), # 設置預設值 50-100
             step=10,
             key="budget_range"
         )
