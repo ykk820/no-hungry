@@ -14,14 +14,14 @@ if 'user_uuid' not in st.session_state:
     st.session_state['user_uuid'] = str(uuid.uuid4())
 
 # ==========================================
-# 1. 系統全域設定 (請確保這些 URL 正確)
+# 1. 系統全域設定 
 # ==========================================
 GAS_URL = "https://script.google.com/macros/s/AKfycbz0ltqrGDA1nwXoqchQ-bTHNIW5jDt5OesfcWs6NNLgb-H2p6t6sM3ikxQQZVr11arHtyg/exec"
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
 # ==========================================
-# 2. 資料庫連線函式 (FIXED: 確保地區名稱去除空白)
+# 2. 資料庫連線函式 (FIXED: 加強地區名稱清理)
 # ==========================================
 def get_client():
     try:
@@ -31,6 +31,15 @@ def get_client():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         return gspread.authorize(creds)
     except: return None
+
+# --- 地區名稱清理函式 ---
+def clean_region_name(name):
+    """移除前後空白並替換常見的特殊空白符號"""
+    if isinstance(name, str):
+        # 移除前後空白、全形空白 (\u3000)
+        return name.strip().replace('\u3000', '').strip()
+    return str(name).strip()
+
 
 @st.cache_data(ttl=10)
 def load_data():
@@ -48,8 +57,11 @@ def load_data():
             for row in raw_shops:
                 name = str(row.get('店名', '')).strip()
                 if name:
+                    # FIX: 使用加強版清理函式
+                    cleaned_region = clean_region_name(row.get('地區', '未分類'))
+                    
                     shops_db[name] = {
-                        'region': str(row.get('地區', '未分類')).strip(), # <<< 修正：加入 .strip()
+                        'region': cleaned_region, # <<< 使用清理後的名稱
                         'mode': str(row.get('模式', '剩食')).strip(),
                         'lat': float(row.get('緯度', 0) or 0),
                         'lon': float(row.get('經度', 0) or 0),
@@ -67,13 +79,12 @@ def load_data():
 
         return shops_db, orders
     except: return {}, []
+# ... (其餘函式如 delete_order, add_shop_to_backend 保持不變) ...
 
 def delete_order(idx):
     client = get_client()
     if client:
         try:
-            # 刪除 gspread 找到的 row index (從 1 開始，且標頭佔用 1)
-            # 這裡的 idx 是 DataFrame 的 index (從 0 開始)，所以要加 2
             client.open_by_key(SPREADSHEET_ID).worksheet("領取紀錄").delete_rows(idx + 2)
             return True
         except: return False
@@ -89,10 +100,7 @@ def add_shop_to_backend(data):
     except Exception as e:
         return {"result": "error", "message": f"網路錯誤: {str(e)}"}
 
-# --- 計算店家狀態的函式 ---
 def get_shop_status(shop_name, shop_info, orders_df):
-    """計算並返回單個店家的即時狀態和相關數據"""
-    
     if orders_df.empty or 'store' not in orders_df.columns:
         queue_count = 0
     else:
@@ -129,15 +137,12 @@ st.set_page_config(page_title="餓不死地圖", page_icon="🍱", layout="wide"
 
 SHOPS_DB, ALL_ORDERS = load_data()
 
-# 確保 ORDERS_DF 存在並包含 'user_id' 欄位
 if not ALL_ORDERS:
     ORDERS_DF = pd.DataFrame()
 else:
     ORDERS_DF = pd.DataFrame(ALL_ORDERS)
-    if 'user_id' not in ORDERS_DF.columns:
-        ORDERS_DF['user_id'] = ''
-    if 'store' not in ORDERS_DF.columns:
-        ORDERS_DF['store'] = ''
+    if 'user_id' not in ORDERS_DF.columns: ORDERS_DF['user_id'] = ''
+    if 'store' not in ORDERS_DF.columns: ORDERS_DF['store'] = ''
 
 params = st.query_params
 current_mode = params.get("mode", "consumer")
@@ -151,7 +156,6 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
     
     with st.sidebar:
         st.title(f"🏪 {shop_target}")
-        # FIX: 清除所有 query params，確保返回預設的消費者模式
         if st.button("⬅️ 登出 (回首頁)"):
             st.query_params.clear() 
             st.rerun()
@@ -187,7 +191,6 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
         shop_orders_display = shop_orders.reset_index().rename(columns={'index': 'original_index'})
         shop_orders_display['號碼牌'] = range(1, len(shop_orders_display) + 1)
         
-        # 管理員操作
         st.write("🛠️ 管理員操作")
         del_opts = [f"{r['original_index']}:{r['號碼牌']}. {r.get('user', '?')} - {r.get('item', '?')}" for i, r in shop_orders_display.iterrows()]
         target_del = st.selectbox("刪除訂單/叫號", del_opts)
@@ -201,7 +204,6 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
             else:
                 st.error("刪除失敗，請檢查權限或連線。")
                 
-        # 顯示訂單列表
         st.dataframe(shop_orders_display[['號碼牌', '時間', 'user', 'item']], use_container_width=True)
     else:
         st.info("目前無待處理訂單")
@@ -266,7 +268,6 @@ else:
                 st.query_params["name"] = target_shop_admin
                 st.rerun()
                 
-            # (QR Code 功能保留)
             st.divider()
             st.subheader("📱 產生 QR Code")
             qr_shop = st.selectbox("選擇店家 (QR Code)", list(SHOPS_DB.keys()))
@@ -288,15 +289,21 @@ else:
         st.stop()
 
     # 區域篩選
-    # FIX: 確保 all_regions 中的名稱也是乾淨的 (雖然 load_data 已修正，這裡加一層防護)
     all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
     selected_region = st.selectbox("📍 請選擇區域", ["所有區域"] + all_regions)
     
-    if selected_region == "所有區域":
+    # FIX: 確保用於篩選的 selected_region 也是經過清理的
+    cleaned_selected_region = clean_region_name(selected_region)
+
+    if cleaned_selected_region == "所有區域":
         filtered_shops = SHOPS_DB
     else:
-        # 篩選邏輯：使用 .strip() 確保比對時不會被空白影響
-        filtered_shops = {k: v for k, v in SHOPS_DB.items() if v['region'].strip() == selected_region}
+        # 篩選邏輯：直接比對 load_data 時已經清理過的 'region' 值
+        filtered_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == cleaned_selected_region}
+    
+    # 顯示除錯訊息：如果篩選後沒有店家，可能是比對問題
+    if not filtered_shops and cleaned_selected_region != "所有區域":
+        st.warning(f"🚨 錯誤：選定區域 **{selected_region}** 下找不到店家。請檢查 Google Sheet 中的地區名稱是否完全一致。")
     
     # 計算地圖中心點和縮放比例
     map_df = pd.DataFrame([
@@ -308,7 +315,7 @@ else:
     map_zoom = 7 
     
     if not map_df.empty:
-        if selected_region != "所有區域":
+        if cleaned_selected_region != "所有區域":
             center_lat = map_df['lat'].mean()
             center_lon = map_df['lon'].mean()
             map_zoom = 14 
