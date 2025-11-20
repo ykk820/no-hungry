@@ -5,27 +5,23 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import urllib.parse
 import time
-import uuid # 引入 UUID 庫來生成唯一ID
+import uuid 
 
 # ==========================================
 # 0. 設置唯一身份識別碼 (UUID)
 # ==========================================
-# 每個使用者訪問時，如果 session_state 中沒有 ID，則生成一個新的 UUID。
-# 這個 ID 將作為限購和黑名單的依據。
 if 'user_uuid' not in st.session_state:
     st.session_state['user_uuid'] = str(uuid.uuid4())
 
 # ==========================================
-# 1. 系統全域設定 (不變)
+# 1. 系統全域設定 (請確保這些 URL 正確)
 # ==========================================
-# 由於 GAS URL 包含敏感資訊，這裡假定它在 st.secrets 或配置中
-# 為確保程式碼可運行性，使用您的原連結
-GAS_URL = "https://script.google.com/macros/s/AKfycbz0ltqrGDA1nwXoqchQ-bTHNIW5jDt5OesfcWs6NNLgb-H2p6t6sM3ikxQZVr11arHtyg/exec"
+GAS_URL = "https://script.google.com/macros/s/AKfycbz0ltqrGDA1nwXoqchQ-bTHNIW5jDt5OesfcWs6NNLgb-H2p6t6sM3ikxQQZVr11arHtyg/exec"
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
 # ==========================================
-# 2. 資料庫連線函式 (保持不變)
+# 2. 資料庫連線函式 (FIXED: 確保地區名稱去除空白)
 # ==========================================
 def get_client():
     try:
@@ -53,7 +49,7 @@ def load_data():
                 name = str(row.get('店名', '')).strip()
                 if name:
                     shops_db[name] = {
-                        'region': str(row.get('地區', '未分類')), 
+                        'region': str(row.get('地區', '未分類')).strip(), # <<< 修正：加入 .strip()
                         'mode': str(row.get('模式', '剩食')).strip(),
                         'lat': float(row.get('緯度', 0) or 0),
                         'lon': float(row.get('經度', 0) or 0),
@@ -93,11 +89,10 @@ def add_shop_to_backend(data):
     except Exception as e:
         return {"result": "error", "message": f"網路錯誤: {str(e)}"}
 
-# --- 新增：計算店家狀態的函式 ---
+# --- 計算店家狀態的函式 ---
 def get_shop_status(shop_name, shop_info, orders_df):
     """計算並返回單個店家的即時狀態和相關數據"""
     
-    # 篩選該店家的訂單
     if orders_df.empty or 'store' not in orders_df.columns:
         queue_count = 0
     else:
@@ -125,7 +120,6 @@ def get_shop_status(shop_name, shop_info, orders_df):
         'status_text': status_text,
         'is_queue_mode': is_queue_mode
     }
-# --- 函式結束 ---
 
 
 # ==========================================
@@ -157,8 +151,9 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
     
     with st.sidebar:
         st.title(f"🏪 {shop_target}")
+        # FIX: 清除所有 query params，確保返回預設的消費者模式
         if st.button("⬅️ 登出 (回首頁)"):
-            st.query_params.clear()
+            st.query_params.clear() 
             st.rerun()
 
     st.title(f"📊 實時銷售看板 - {shop_target}")
@@ -189,7 +184,6 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
     st.subheader("📋 待處理名單")
     
     if not shop_orders.empty:
-        # 為了後台操作，需要保留原始 Index (用來刪除)
         shop_orders_display = shop_orders.reset_index().rename(columns={'index': 'original_index'})
         shop_orders_display['號碼牌'] = range(1, len(shop_orders_display) + 1)
         
@@ -255,15 +249,15 @@ else:
                             "stock": new_stock,
                             "mode": new_mode
                         })
+                        st.cache_data.clear()
                         if result['result'] == 'success':
                             st.success(result['message'])
                             st.balloons()
-                            st.cache_data.clear()
                             st.rerun()
                         else:
                             st.error(f"新增失敗: {result['message']}")
             
-            # 🚀 快速進入商家後台 (保留)
+            # 🚀 快速進入商家後台 
             st.divider()
             st.subheader("🚀 快速進入商家後台")
             target_shop_admin = st.selectbox("選擇要管理的店家", list(SHOPS_DB.keys()))
@@ -294,15 +288,17 @@ else:
         st.stop()
 
     # 區域篩選
+    # FIX: 確保 all_regions 中的名稱也是乾淨的 (雖然 load_data 已修正，這裡加一層防護)
     all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
     selected_region = st.selectbox("📍 請選擇區域", ["所有區域"] + all_regions)
     
     if selected_region == "所有區域":
         filtered_shops = SHOPS_DB
     else:
-        filtered_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == selected_region}
+        # 篩選邏輯：使用 .strip() 確保比對時不會被空白影響
+        filtered_shops = {k: v for k, v in SHOPS_DB.items() if v['region'].strip() == selected_region}
     
-    # 計算地圖中心點和縮放比例 (已修正)
+    # 計算地圖中心點和縮放比例
     map_df = pd.DataFrame([
         {'shop_name': k, 'lat': v['lat'], 'lon': v['lon']} for k, v in filtered_shops.items()
     ])
@@ -320,7 +316,7 @@ else:
             center_lat = map_df['lat'].mean()
             center_lon = map_df['lon'].mean()
 
-    # 顯示地圖 (使用計算後的中心點)
+    # 顯示地圖
     st.map(
         map_df, 
         latitude=center_lat, 
@@ -331,19 +327,19 @@ else:
     
     st.divider()
 
-    # --- 顯示人潮多寡列表 (使用 Form 確保點擊跳轉穩定性) ---
+    # --- 顯示人潮多寡列表 ---
     st.subheader("📊 即時人潮狀態一覽")
     
     if not filtered_shops:
         st.info("所選區域目前沒有任何店家資訊。")
     else:
-        # 1. 計算店家狀態 (保持不變)
+        # 1. 計算店家狀態 
         shops_with_status = []
         for name, info in filtered_shops.items():
             status = get_shop_status(name, info, ORDERS_DF)
             shops_with_status.append({'name': name, 'info': info, 'status': status})
         
-        # 2. 排序邏輯 (保持不變)
+        # 2. 排序邏輯 
         shops_with_status.sort(key=lambda x: (
             not x['status']['is_available'], 
             x['status']['is_queue_mode'],    
@@ -353,10 +349,9 @@ else:
         cols_per_row = 3
         cols = st.columns(cols_per_row)
         
-        # --- 使用一個隱藏的 Form 來包裝所有按鈕，確保點擊後的狀態更新 ---
+        # --- 使用 Form 確保點擊跳轉穩定性 ---
         with st.form("shop_list_form"):
             
-            # 遍歷店家並在 Columns 中顯示
             for i, shop in enumerate(shops_with_status):
                 name = shop['name']
                 info = shop['info']
@@ -364,25 +359,20 @@ else:
                 
                 with cols[i % cols_per_row]:
                     
-                    # 判斷使用者的下單狀態
                     user_is_in_queue = False
                     my_queue_number = 0
                     if not ORDERS_DF.empty and 'user_id' in ORDERS_DF.columns and 'store' in ORDERS_DF.columns:
                         my_queue = ORDERS_DF[(ORDERS_DF['user_id'] == st.session_state['user_uuid']) & (ORDERS_DF['store'] == name)]
                         if not my_queue.empty:
                             user_is_in_queue = True
-                            # 計算隊伍號碼
                             shop_orders = ORDERS_DF[ORDERS_DF['store'] == name]
                             my_order_index = my_queue.index[0]
-                            # 找出自己在篩選後的 dataframe 中的位置
                             my_queue_number = len(shop_orders[shop_orders.index <= my_order_index])
 
 
-                    # 創建簡潔卡片
                     with st.container(border=True):
                         st.markdown(f"**🏪 {name}** ({info['region']})")
                         
-                        # 顯示人潮狀態
                         st.markdown(f"**{status['status_text']}**")
                         
                         if status['is_queue_mode']:
@@ -390,18 +380,14 @@ else:
                         elif status['is_available']:
                             st.caption(f"模式：剩食 | 價格：**${info['price']}**")
 
-                        # 顯示用戶自己的狀態
                         if user_is_in_queue:
                             st.success(f"🎉 **您排在 {my_queue_number} 號！**")
                             
-                        # --- 關鍵修正：使用 st.form_submit_button 觸發跳轉 ---
                         if status['is_available'] and not user_is_in_queue:
                             st.form_submit_button(
                                 "我要排隊/搶購", 
                                 type="primary", 
-                                help="點擊進入詳細下單頁面",
                                 use_container_width=True,
-                                # 使用 key 傳遞店家名稱，這個 key 會在 session_state 中被設置
                                 key=f"submit_btn_{name}" 
                             )
                         elif user_is_in_queue:
@@ -409,21 +395,14 @@ else:
                         else:
                             st.button("休息中", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
             
-            # Form 提交按鈕是必須的，但我們讓它隱藏
-            # 由於我們使用 Form Submit Button 的 Key 特性，這個 submit button 實際上不需要
-            # 但如果 Streamlit 要求至少有一個 submit button，可以保留一個隱藏的，這裡選擇不保留。
-
-
         # --- 處理 Form 提交後的跳轉 (在 Form 外執行) ---
         submitted = False
         target_shop_to_jump = None
         
-        # 遍歷檢查是哪個 form_submit_button 被點擊了
         for shop in shops_with_status:
             name = shop['name']
             if st.session_state.get(f"submit_btn_{name}"):
                 target_shop_to_jump = name
-                # 必須重設 session_state，否則會無限循環 Rerun
                 st.session_state[f"submit_btn_{name}"] = False 
                 submitted = True
                 break
@@ -436,7 +415,6 @@ else:
         
         st.divider()
         
-        # 檢查是否從上面的列表點擊了「我要排隊/搶購」
         if 'target_shop' in st.query_params and st.query_params['target_shop'] in filtered_shops:
             target_shop_name = st.query_params['target_shop']
             
@@ -444,7 +422,6 @@ else:
             info = filtered_shops[target_shop_name]
             status = get_shop_status(target_shop_name, info, ORDERS_DF)
             
-            # 顯示詳細資訊和下單表單 
             if status['is_available']:
                 st.markdown(f"**狀態：** {status['status_text']}")
                 
@@ -453,7 +430,6 @@ else:
                 btn_txt = "🚪 領取號碼牌 (排隊)" if status['is_queue_mode'] else "🚀 立即搶購 (剩食)"
                 
                 if st.button(btn_txt, type="primary", use_container_width=True, key="detail_order_btn"):
-                    # 執行下單邏輯 
                     if u_name:
                         user_has_order = False
                         if not ORDERS_DF.empty:
@@ -475,7 +451,6 @@ else:
                                     st.success(f"成功！")
                                     st.balloons()
                                     st.cache_data.clear()
-                                    # 移除 target_shop 參數，回到列表
                                     st.query_params.pop('target_shop')
                                     st.rerun()
                                 except: 
