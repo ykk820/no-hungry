@@ -12,6 +12,10 @@ import uuid
 if 'user_uuid' not in st.session_state:
     st.session_state['user_uuid'] = str(uuid.uuid4())
 
+# --- Session State 初始化 (用於隱藏管理員介面) ---
+if 'admin_login_visible' not in st.session_state:
+    st.session_state['admin_login_visible'] = False
+
 # ==========================================
 # 1. 系統全域設定 
 # ==========================================
@@ -72,7 +76,6 @@ def load_data():
                     shops_db[name] = {
                         'region': cleaned_region, 
                         'mode': str(row.get('模式', '剩食')).strip(),
-                        # ⚠️ 徹底移除 Lat/Lon 讀取
                         'item': str(row.get('商品', '優惠商品')),
                         'price': int(row.get('價格', 0) or 0),
                         'stock': int(row.get('初始庫存', 0) or 0)
@@ -134,15 +137,11 @@ def get_shop_status(shop_name, shop_info, orders_df):
     if orders_df.empty or 'store' not in orders_df.columns:
         queue_count = 0
     else:
-        shop_orders = orders_df[shop_orders.index[-1]].copy() # 修正：這裡的篩選邏輯需要修正
         # 由於 get_shop_status 的 orders_df 參數可能已被過濾，這裡應該使用外部的 ALL_ORDERS 或修正篩選方式
-        
-        # 採用修正後的篩選，使用傳入的 shop_target 確保訂單正確
         if 'store' in ORDERS_DF.columns:
             shop_orders = ORDERS_DF[ORDERS_DF['store'] == shop_name].copy()
             queue_count = len(shop_orders)
         else:
-            # 安全回退
              queue_count = 0
 
 
@@ -255,12 +254,21 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
 
 # --- 消費者 + 管理員模式 (B) ---
 else:
-    # --- 側邊欄：管理員 (新增店家表單 - 使用下拉選單) ---
+    # --- 側邊欄：管理員 (控制面板) ---
     with st.sidebar:
-        st.header("🔒 管理員")
-        password = st.text_input("密碼", type="password")
-        is_admin = (password == "ykk8880820")
         
+        # 💡 FIX: 隱藏後台介面：使用按鈕控制登入區塊的顯示
+        if st.button("🔒 管理員登入", use_container_width=True):
+            st.session_state['admin_login_visible'] = not st.session_state['admin_login_visible']
+
+        if st.session_state['admin_login_visible']:
+            st.divider()
+            st.header("🔑 登入")
+            password = st.text_input("密碼", type="password")
+            is_admin = (password == "ykk8880820")
+        else:
+            is_admin = False
+
         if is_admin:
             st.success("已登入")
             st.link_button("📄 開啟 Google Sheet", f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit", help="直接編輯數據庫")
@@ -269,13 +277,13 @@ else:
         # 獲取所有地區和模式選項
         all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
         
-        # --- 管理員新增店家表單邏輯 ---
+        # --- 管理員新增店家表單邏輯 (只有登入後才顯示) ---
         if is_admin:
             # 從 SUGGESTED_REGIONS_FULL 提取行政區和社區名
             unique_main_regions = sorted(list(set([r.split(' - ')[0].strip() for r in SUGGESTED_REGIONS_FULL])))
             
-            st.subheader("➕ 一鍵新增店家 (手動輸入坐標)")
-            st.caption("請手動將經緯度設為 0, 0 或輸入您已知的精確坐標")
+            st.subheader("➕ 一鍵新增店家")
+            st.caption("請手動將經緯度設為 0, 0")
             with st.form("add_shop_form"):
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -283,11 +291,9 @@ else:
                     new_item = st.text_input("商品名*", key="new_item", value="剩食套餐")
                     new_price = st.number_input("價格*", min_value=1, value=50)
                 with col_b:
-                    # ⚠️ 移除地址定位，改為手動輸入經緯度
-                    new_lat = st.number_input("緯度 (Lat)*", value=0.0, help="例如: 25.1764 (如不需要可填 0)")
-                    new_lon = st.number_input("經度 (Lon)*", value=0.0, help="例如: 121.4498 (如不需要可填 0)")
-
-                    # --- FIX: 雙層地區選擇輸入 ---
+                    # ⚠️ FIX: 移除 Lat/Lon 輸入，簡化管理員操作
+                    
+                    # --- 雙層地區選擇輸入 ---
                     selected_main_region = st.selectbox(
                         "選擇行政區*", 
                         ["新增行政區..."] + unique_main_regions,
@@ -325,8 +331,7 @@ else:
                             "price": new_price,
                             "stock": new_stock,
                             "mode": new_mode,
-                            "lat": new_lat, # 傳入緯度 (佔位)
-                            "lon": new_lon  # 傳入經度 (佔位)
+                            # ⚠️ 移除 Lat/Lon 參數傳遞
                         })
             
             # 🚀 快速進入商家後台 
@@ -368,21 +373,12 @@ else:
         st.warning("⚠️ 無法讀取店家資料，請檢查 Google Sheet 設定。")
         st.stop()
 
-    # --- 篩選器與狀態管理 ---
-    all_full_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
-    
-    # 從完整的地區名稱中提取第一級行政區
-    unique_main_regions = sorted(list(set([r.split(' - ')[0].strip() for r in all_full_regions if ' - ' in r])))
-    
-    # 初始化篩選狀態
-    if 'main_region_select' not in st.session_state:
-         st.session_state['main_region_select'] = "所有區域"
-
-    # --- 雙層篩選器 ---
+    # --- 篩選器 ---
     col_filter_1, col_filter_2, col_filter_3 = st.columns([1, 1, 3])
 
     with col_filter_1:
         # Level 1: 行政區篩選
+        unique_main_regions = sorted(list(set([r.split(' - ')[0].strip() for r in all_regions if ' - ' in r])))
         selected_main_region = st.selectbox(
             "📍 行政區", 
             ["所有區域"] + unique_main_regions,
@@ -400,7 +396,7 @@ else:
     
     if main_filter_key != "所有區域":
         # 獲取符合 Level 1 的所有 Level 2 社區名稱
-        sub_regions_raw = [r.split(' - ')[1].strip() for r in all_full_regions if r.startswith(main_filter_key)]
+        sub_regions_raw = [r.split(' - ')[1].strip() for r in all_regions if r.startswith(main_filter_key)]
         sub_regions = ["所有社區"] + sorted(list(set(sub_regions_raw)))
 
     with col_filter_2:
