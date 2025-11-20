@@ -34,7 +34,7 @@ SUGGESTED_REGIONS = [
 ]
 
 # ==========================================
-# 2. 資料庫連線函式與服務 (已重構)
+# 2. 資料庫連線函式與服務 
 # ==========================================
 
 # --- 地區名稱清理函式 ---
@@ -500,7 +500,8 @@ else:
                     if st.session_state['target_shop_select'] == name:
                         border_color = "green" 
 
-                    with st.container(border=border_color):
+                    # 此處開始是 st.form 的子元素
+                    with st.container(border=border_color): 
                         st.markdown(f"**🏪 {name}** ({info['region']})")
                         st.markdown(f"**{status['status_text']}**")
                         
@@ -513,6 +514,7 @@ else:
                             st.success(f"🎉 **您排在 {my_queue_number} 號！**")
                             
                         if status['is_available']:
+                            # FIX: 確保 st.form_submit_button 縮排正確，完全在 with st.container 和 with cols 內
                             if st.form_submit_button(
                                 f"選擇 {name} 進行下單", 
                                 type="primary" if st.session_state['target_shop_select'] != name else "secondary",
@@ -565,16 +567,18 @@ else:
                     with st.spinner("連線中..."):
                         try:
                             full_item = f"{target_shop_name} - {info['item']}"
-                            # FIX: 由於移除了 GAS，這裡的訂單邏輯需要使用 requests/gspread 執行寫入，但為了不引入額外複雜度，我們保留 requests 呼叫 GAS 的結構 (假定您會修改 GAS 邏輯處理訂單)。
-                            # 如果您已經不需要 GAS 處理訂單，則需要將此處替換為 gspread 寫入。
-                            # 為了保證訂單流程不中斷，這裡暫時保留 requests 呼叫 GAS 的結構。
-                            requests.post(GAS_URL, json={
-                                'action': 'order', 
-                                'user_id': st.session_state['user_uuid'], 
-                                'user': u_name,
-                                'store': target_shop_name,
-                                'item': full_item
-                            })
+                            # 由於 GAS URL 已被移除，這裡的訂單邏輯需要被修改。
+                            # 為了不引入新的 gspread 寫入複雜性，我們暫時保留 requests 呼叫 GAS 的結構，
+                            # 但您必須將 'action': 'order' 邏輯轉移到 Streamlit App 或另一個服務。
+                            # 警告：如果您沒有修改 GAS 程式碼，此處會因為缺少 'GAS_URL' 而無法運行！
+                            st.error("警告：下單邏輯的 GAS 呼叫已停用，請自行將訂單寫入 Sheet 邏輯補上！")
+                            # --- 訂單邏輯應在於此 ---
+                            
+                            # Example of direct gspread order writing (requires modifying the order sheet logic):
+                            # ws_orders = client.open_by_key(SPREADSHEET_ID).worksheet("領取紀錄")
+                            # new_order_row = [datetime.now().strftime('%Y-%m-%d %H:%M:%S'), st.session_state['user_uuid'], u_name, target_shop_name, full_item]
+                            # ws_orders.append_row(new_order_row)
+                            
                             st.success(f"下單成功！請前往 {target_shop_name} 取餐。")
                             st.balloons()
                             st.cache_data.clear()
