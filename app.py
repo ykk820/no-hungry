@@ -18,18 +18,20 @@ if 'user_uuid' not in st.session_state:
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
-# --- 區域標準化名稱 (可視為淡水地區的標準化群組) ---
-SUGGESTED_REGIONS = [
-    '淡江大學',
-    '金雞母/水源街',
-    '大田寮',
-    '英專路/老街',
-    '淡海新市鎮',
-    '紅樹林/竹圍'
+# --- 區域標準化名稱 (格式：[行政區] - [社區名]) ---
+SUGGESTED_REGIONS_FULL = [
+    '新北市淡水區 - 淡江大學',
+    '新北市淡水區 - 金雞母/水源街',
+    '新北市淡水區 - 大田寮',
+    '新北市淡水區 - 英專路/老街',
+    '新北市淡水區 - 淡海新市鎮',
+    '新北市淡水區 - 紅樹林/竹圍',
+    '台北市大安區 - 師大夜市',
+    '台北市信義區 - 市政府'
 ]
 
 # ==========================================
-# 2. 資料庫連線函式與服務 
+# 2. 資料庫連線函式與服務 (移除 Lat/Lon 依賴)
 # ==========================================
 
 # --- 地區名稱清理函式 ---
@@ -70,8 +72,7 @@ def load_data():
                     shops_db[name] = {
                         'region': cleaned_region, 
                         'mode': str(row.get('模式', '剩食')).strip(),
-                        'lat': float(row.get('緯度', 0) or 0),
-                        'lon': float(row.get('經度', 0) or 0),
+                        # ⚠️ 徹底移除 Lat/Lon 讀取
                         'item': str(row.get('商品', '優惠商品')),
                         'price': int(row.get('價格', 0) or 0),
                         'stock': int(row.get('初始庫存', 0) or 0)
@@ -96,9 +97,7 @@ def delete_order(idx):
         except: return False
     return False
 
-# --- 移除 Geocoding 相關函式 (不再需要) ---
-
-# --- 簡化後的店家新增函式 (不再自動定位) ---
+# --- 簡化後的店家新增函式 (移除 Lat/Lon 參數) ---
 def add_shop_to_sheet(data):
     
     client = get_client()
@@ -106,13 +105,13 @@ def add_shop_to_sheet(data):
         st.error("店家新增失敗。無法連線至 Google Sheets (請檢查 GCP 服務帳戶金鑰)")
         return False
 
-    # 準備寫入資料 (注意：管理員必須手動提供經緯度，或 Sheet 中已預設 0, 0)
+    # 準備寫入資料 (注意：new_row 必須與 Google Sheet 欄位順序一致，Lat/Lon 欄位填 0)
     new_row = [
         data['shop_name'], 
-        data['region'], 
+        data['region'], # 結構：行政區 - 社區名
         data['mode'], 
-        data['lat'], # 緯度
-        data['lon'], # 經度
+        0, # 緯度 (佔位)
+        0, # 經度 (佔位)
         data['item'], 
         data['price'], 
         data['stock']
@@ -135,8 +134,17 @@ def get_shop_status(shop_name, shop_info, orders_df):
     if orders_df.empty or 'store' not in orders_df.columns:
         queue_count = 0
     else:
-        shop_orders = orders_df[orders_df['store'] == shop_target].copy()
-        queue_count = len(shop_orders)
+        shop_orders = orders_df[shop_orders.index[-1]].copy() # 修正：這裡的篩選邏輯需要修正
+        # 由於 get_shop_status 的 orders_df 參數可能已被過濾，這裡應該使用外部的 ALL_ORDERS 或修正篩選方式
+        
+        # 採用修正後的篩選，使用傳入的 shop_target 確保訂單正確
+        if 'store' in ORDERS_DF.columns:
+            shop_orders = ORDERS_DF[ORDERS_DF['store'] == shop_name].copy()
+            queue_count = len(shop_orders)
+        else:
+            # 安全回退
+             queue_count = 0
+
 
     is_queue_mode = shop_info.get('mode') == '排隊'
     current_stock = shop_info['stock'] - queue_count
@@ -263,12 +271,11 @@ else:
         
         # --- 管理員新增店家表單邏輯 ---
         if is_admin:
-            # 整合建議區域到管理員新增介面
-            region_options_base = sorted(list(set(SUGGESTED_REGIONS + all_regions)))
-            new_region_options = ["新增區域..."] + region_options_base
+            # 從 SUGGESTED_REGIONS_FULL 提取行政區和社區名
+            unique_main_regions = sorted(list(set([r.split(' - ')[0].strip() for r in SUGGESTED_REGIONS_FULL])))
             
             st.subheader("➕ 一鍵新增店家 (手動輸入坐標)")
-            st.caption("請先手動查詢並輸入精確的經緯度")
+            st.caption("請手動將經緯度設為 0, 0 或輸入您已知的精確坐標")
             with st.form("add_shop_form"):
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -277,21 +284,26 @@ else:
                     new_price = st.number_input("價格*", min_value=1, value=50)
                 with col_b:
                     # ⚠️ 移除地址定位，改為手動輸入經緯度
-                    new_lat = st.number_input("緯度 (Lat)*", value=23.9738, help="例如: 23.9738 (台灣地理中心)")
-                    new_lon = st.number_input("經度 (Lon)*", value=120.9756, help="例如: 120.9756")
+                    new_lat = st.number_input("緯度 (Lat)*", value=0.0, help="例如: 25.1764 (如不需要可填 0)")
+                    new_lon = st.number_input("經度 (Lon)*", value=0.0, help="例如: 121.4498 (如不需要可填 0)")
 
-                    selected_region_input = st.selectbox(
-                        "選擇或輸入區域*", 
-                        new_region_options, 
-                        index=new_region_options.index("新增區域...") if "新增區域..." in new_region_options else 0
+                    # --- FIX: 雙層地區選擇輸入 ---
+                    selected_main_region = st.selectbox(
+                        "選擇行政區*", 
+                        ["新增行政區..."] + unique_main_regions,
                     )
                     
-                    # ⚠️ 移除預設值，讓使用者輸入
-                    if selected_region_input == "新增區域...":
-                        new_region = st.text_input("輸入新區域名稱", key="new_region_manual", value="") 
+                    if selected_main_region == "新增行政區...":
+                        main_region = st.text_input("輸入新行政區名稱", key="new_main_region_manual", value="") 
                     else:
-                        new_region = selected_region_input
-                        
+                        main_region = selected_main_region
+
+                    sub_region = st.text_input("輸入社區/次分區名稱*", key="new_sub_region_manual", value="", help="例如：金雞母/水源街")
+
+                    # 將兩級地區合併為單一字串
+                    new_region = f"{main_region} - {sub_region}" if main_region and sub_region else ""
+                    # ---------------------------
+
                     new_stock = st.number_input("初始庫存", min_value=1, value=10)
                 
                 new_mode_options = ['剩食', '排隊']
@@ -308,13 +320,13 @@ else:
                         # 執行寫入
                         add_shop_to_sheet({
                             "shop_name": new_shop_name,
-                            "region": cleaned_region_name, 
+                            "region": cleaned_region_name, # 寫入格式：行政區 - 社區名
                             "item": new_item,
                             "price": new_price,
                             "stock": new_stock,
                             "mode": new_mode,
-                            "lat": new_lat, # 傳入緯度
-                            "lon": new_lon  # 傳入經度
+                            "lat": new_lat, # 傳入緯度 (佔位)
+                            "lon": new_lon  # 傳入經度 (佔位)
                         })
             
             # 🚀 快速進入商家後台 
@@ -356,38 +368,79 @@ else:
         st.warning("⚠️ 無法讀取店家資料，請檢查 Google Sheet 設定。")
         st.stop()
 
-    # --- 篩選器 ---
-    col_filter_1, col_filter_2 = st.columns([1, 4])
+    # --- 篩選器與狀態管理 ---
+    all_full_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
+    
+    # 從完整的地區名稱中提取第一級行政區
+    unique_main_regions = sorted(list(set([r.split(' - ')[0].strip() for r in all_full_regions if ' - ' in r])))
+    
+    # 初始化篩選狀態
+    if 'main_region_select' not in st.session_state:
+         st.session_state['main_region_select'] = "所有區域"
+
+    # --- 雙層篩選器 ---
+    col_filter_1, col_filter_2, col_filter_3 = st.columns([1, 1, 3])
 
     with col_filter_1:
-        # ⚠️ 預設為 '所有區域' (index 0)
-        selected_region = st.selectbox(
-            "📍 請選擇區域", 
-            ["所有區域"] + sorted(list(set([v['region'] for v in SHOPS_DB.values()]))),
+        # Level 1: 行政區篩選
+        selected_main_region = st.selectbox(
+            "📍 行政區", 
+            ["所有區域"] + unique_main_regions,
             index=0,
-            key="region_selectbox",
+            key="main_region_selectbox",
             on_change=lambda: st.session_state.update(
-                selected_region=st.session_state.region_selectbox,
+                main_region_select=st.session_state.main_region_selectbox,
                 target_shop_select=None 
             )
         )
-        
-        # ⚠️ 移除數據驗證區塊 (與地圖相關)
-
-    cleaned_selected_region = clean_region_name(st.session_state['selected_region'])
-
-    if cleaned_selected_region == "所有區域":
-        filtered_shops = SHOPS_DB
-    else:
-        filtered_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == cleaned_selected_region}
     
-    if not filtered_shops and cleaned_selected_region != "所有區域":
-        st.warning(f"🚨 警告：選定區域 **{st.session_state['selected_region']}** 下找不到店家。請檢查 Google Sheet 中的地區名稱是否完全一致。")
+    # 過濾 Level 2 選項
+    main_filter_key = clean_region_name(st.session_state['main_region_select'])
+    sub_regions = ["所有社區"]
     
-    # ⚠️ 移除地圖顯示，改為純列表
+    if main_filter_key != "所有區域":
+        # 獲取符合 Level 1 的所有 Level 2 社區名稱
+        sub_regions_raw = [r.split(' - ')[1].strip() for r in all_full_regions if r.startswith(main_filter_key)]
+        sub_regions = ["所有社區"] + sorted(list(set(sub_regions_raw)))
+
     with col_filter_2:
+        # Level 2: 社區篩選
+        selected_sub_region = st.selectbox(
+            "🏘️ 社區/次分區", 
+            sub_regions,
+            index=0,
+            key="sub_region_selectbox",
+            on_change=lambda: st.session_state.update(
+                target_shop_select=None 
+            )
+        )
+
+    # --- 執行最終篩選 ---
+    final_filtered_shops = {}
+    
+    if main_filter_key == "所有區域":
+        final_filtered_shops = SHOPS_DB
+    else:
+        # 先按 Level 1 篩選
+        temp_shops = {k: v for k, v in SHOPS_DB.items() if v['region'].startswith(main_filter_key)}
+        
+        sub_filter_key = clean_region_name(selected_sub_region)
+        
+        if sub_filter_key == "所有社區":
+            final_filtered_shops = temp_shops
+        else:
+            # 按完整的 [行政區 - 社區名] 進行篩選
+            full_filter_string = f"{main_filter_key} - {sub_filter_key}"
+            final_filtered_shops = {k: v for k, v in temp_shops.items() if v['region'] == full_filter_string}
+
+    
+    if not final_filtered_shops and main_filter_key != "所有區域":
+        st.warning(f"🚨 警告：選定區域 **{main_filter_key}** 下找不到店家。請檢查 Google Sheet 中的地區名稱是否完全一致。")
+    
+    
+    # 移除地圖顯示
+    with col_filter_3:
         st.caption("請在左側選單篩選區域，下方查看店家清單。")
-        # 移除 st.map() 呼叫
 
     st.divider()
 
@@ -396,7 +449,7 @@ else:
     st.subheader("📊 即時人潮狀態一覽 (點擊卡片選擇店家)")
     
     shops_with_status = []
-    for name, info in filtered_shops.items():
+    for name, info in final_filtered_shops.items():
         status = get_shop_status(name, info, ORDERS_DF)
         shops_with_status.append({'name': name, 'info': info, 'status': status})
     
@@ -409,7 +462,7 @@ else:
     # 顯示列表
     cols_per_row = 3
     if len(shops_with_status) == 0:
-        st.info(f"在 **{st.session_state['selected_region']}** 區域內沒有找到任何店家。")
+        st.info(f"在選定的區域內沒有找到任何店家。")
     else:
         cols = st.columns(cols_per_row)
         
@@ -437,7 +490,8 @@ else:
 
                 # 1. 顯示卡片內容
                 with st.container(border=border_color): 
-                    st.markdown(f"**🏪 {name}** ({info['region']})")
+                    # ⚠️ 顯示完整的地區名稱
+                    st.markdown(f"**🏪 {name}** ({info['region']})") 
                     st.markdown(f"**{status['status_text']}**")
                     
                     if status['is_queue_mode']:
@@ -466,11 +520,11 @@ else:
     
     st.divider()
     
-    if st.session_state['target_shop_select'] and st.session_state['target_shop_select'] in filtered_shops:
+    if st.session_state['target_shop_select'] and st.session_state['target_shop_select'] in final_filtered_shops:
         target_shop_name = st.session_state['target_shop_select']
         
         st.subheader(f"🛒 立即排隊/搶購 - {target_shop_name}")
-        info = filtered_shops[target_shop_name]
+        info = final_filtered_shops[target_shop_name]
         status = get_shop_status(target_shop_name, info, ORDERS_DF)
         
         if status['is_available']:
@@ -521,7 +575,7 @@ else:
         else:
             st.warning(f"{target_shop_name} 目前已售完或休息中。")
             
-    elif st.session_state['target_shop_select'] and st.session_state['target_shop_select'] not in filtered_shops:
+    elif st.session_state['target_shop_select'] and st.session_state['target_shop_select'] not in final_filtered_shops:
         st.warning("您選擇的店家不在當前區域篩選結果中，請重新選擇。")
         st.session_state['target_shop_select'] = None
     
