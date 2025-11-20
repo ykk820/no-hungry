@@ -382,7 +382,7 @@ else:
                     # --- FIX: 只能選擇現有地區 ---
                     all_existing_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
                     
-                    # 只有當有地區存在時才提供選擇
+                    # 判斷是否還有地區可選
                     if all_existing_regions:
                         new_region = st.selectbox(
                             "選擇現有地區*", 
@@ -397,8 +397,6 @@ else:
                              value="請在此輸入第一個地區名稱",
                              help="請確保名稱標準化，例：新北市淡水區淡江大學"
                         )
-                        st.warning("無現有地區可選，請輸入第一個地區名稱。")
-
 
                     new_stock = st.number_input("初始庫存", min_value=1, value=10)
                 
@@ -408,23 +406,31 @@ else:
                 
                 # --- 呼叫 Streamlit 內建的寫入邏輯 ---
                 if submitted:
-                    # 檢查如果是手動輸入，則不能為空
-                    if 'new_region_manual' in st.session_state and st.session_state['new_region_manual'] == "請在此輸入第一個地區名稱":
-                         st.error("請輸入有效的地區名稱。")
+                    
+                    # 修正：如果選擇的是手動輸入框，則取手動輸入的值
+                    if 'new_region_select' not in st.session_state and 'new_region_manual' in st.session_state:
+                         submitted_region = st.session_state['new_region_manual']
+                    elif 'new_region_select' in st.session_state:
+                         submitted_region = st.session_state['new_region_select']
                     else:
-                        cleaned_region_name = clean_region_name(new_region)
-                        if not all([new_shop_name, cleaned_region_name]): 
-                            st.error("店名、地區不可為空！")
-                        else:
-                            # 執行寫入
-                            add_shop_to_sheet({
-                                "shop_name": new_shop_name,
-                                "region": cleaned_region_name, # 自由輸入的地區名
-                                "item": new_item,
-                                "price": new_price,
-                                "stock": new_stock,
-                                "mode": new_mode, # 固定為剩食
-                            })
+                         submitted_region = ""
+                         
+                    cleaned_region_name = clean_region_name(submitted_region)
+                    
+                    if not all([new_shop_name, cleaned_region_name]): 
+                        st.error("店名、地區不可為空！")
+                    elif cleaned_region_name == "請在此輸入第一個地區名稱":
+                        st.error("請輸入有效的地區名稱。")
+                    else:
+                        # 執行寫入
+                        add_shop_to_sheet({
+                            "shop_name": new_shop_name,
+                            "region": cleaned_region_name, # 自由輸入的地區名
+                            "item": new_item,
+                            "price": new_price,
+                            "stock": new_stock,
+                            "mode": new_mode, # 固定為剩食
+                        })
             
             # 🚀 快速進入商家後台 
             st.divider()
