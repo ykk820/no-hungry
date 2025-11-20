@@ -9,7 +9,7 @@ import uuid
 # --- 新增 geopy 函式庫 ---
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError 
-from datetime import datetime # 用於訂單寫入
+from datetime import datetime # <<< 最終修正：補上 datetime 模組
 
 # ==========================================
 # 0. 設置唯一身份識別碼 (UUID)
@@ -103,7 +103,7 @@ def delete_order(idx):
     return False
 
 # --- FIX: Nominatim Geocoding 服務函式 (無需 Key) ---
-@st.cache_data(ttl=3600) 
+@st.cache_data(ttl=3600) # 緩存定位結果一小時
 def geocode_with_nominatim(address):
     """使用 OpenStreetMap Nominatim 服務將地址轉換為經緯度"""
     try:
@@ -128,6 +128,7 @@ def add_shop_to_sheet(data):
     
     # 1. 執行 Geocoding
     st.info(f"正在使用 OpenStreetMap 服務定位地址: {data['address']}...")
+    # FIX: 呼叫 Nominatim 定位函式
     lat, lon, message = geocode_with_nominatim(data['address'])
     
     if lat is None:
@@ -499,7 +500,7 @@ else:
                     if st.session_state['target_shop_select'] == name:
                         border_color = "green" 
 
-                    # 此處開始是 st.form 的子元素
+                    # 1. 顯示卡片內容
                     with st.container(border=border_color): 
                         st.markdown(f"**🏪 {name}** ({info['region']})")
                         st.markdown(f"**{status['status_text']}**")
@@ -512,7 +513,8 @@ else:
                         if user_is_in_queue:
                             st.success(f"🎉 **您排在 {my_queue_number} 號！**")
                             
-                    # --- FIX: 將 st.form_submit_button 移到 with st.container 結束後，確保它位於 with cols 和 with st.form 內 ---
+                    # 2. 顯示按鈕 (位於 with cols 內，確保在 st.form 作用域內)
+                    # FIX: 再次確認按鈕不在 st.container 內 (已在 Line 559 執行此分離)
                     if status['is_available']:
                         if st.form_submit_button(
                             f"選擇 {name} 進行下單", 
@@ -567,8 +569,7 @@ else:
                         try:
                             full_item = f"{target_shop_name} - {info['item']}"
                             
-                            # 警告：此處的訂單寫入邏輯需要修正！
-                            # 由於我們不再使用外部 API (GAS) 處理訂單，必須使用 gspread 寫入「領取紀錄」
+                            # --- 訂單寫入邏輯 ---
                             client = get_client()
                             if client:
                                 ws_orders = client.open_by_key(SPREADSHEET_ID).worksheet("領取紀錄")
