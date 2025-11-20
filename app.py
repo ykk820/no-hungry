@@ -5,16 +5,13 @@ import pandas as pd
 import urllib.parse
 from datetime import datetime
 import uuid 
+import numpy as np # 新增 numpy 處理數據範圍
 
 # ==========================================
 # 0. 設置唯一身份識別碼 (UUID)
 # ==========================================
 if 'user_uuid' not in st.session_state:
     st.session_state['user_uuid'] = str(uuid.uuid4())
-
-# --- Session State 初始化 (用於隱藏管理員介面) ---
-if 'admin_login_visible' not in st.session_state:
-    st.session_state['admin_login_visible'] = False
 
 # ==========================================
 # 1. 系統全域設定 
@@ -137,7 +134,6 @@ def get_shop_status(shop_name, shop_info, orders_df):
     if orders_df.empty or 'store' not in orders_df.columns:
         queue_count = 0
     else:
-        # 由於 get_shop_status 的 orders_df 參數可能已被過濾，這裡應該使用外部的 ALL_ORDERS 或修正篩選方式
         if 'store' in ORDERS_DF.columns:
             shop_orders = ORDERS_DF[ORDERS_DF['store'] == shop_name].copy()
             queue_count = len(shop_orders)
@@ -289,7 +285,7 @@ else:
                 with col_a:
                     new_shop_name = st.text_input("店名*", key="new_shop_name")
                     new_item = st.text_input("商品名*", key="new_item", value="剩食套餐")
-                    new_price = st.number_input("價格*", min_value=1, value=50)
+                    new_price = st.number_input("價格*", min_value=1, value=50) # 價格輸入
                 with col_b:
                     # ⚠️ FIX: 移除 Lat/Lon 輸入，簡化管理員操作
                     
@@ -331,7 +327,6 @@ else:
                             "price": new_price,
                             "stock": new_stock,
                             "mode": new_mode,
-                            # ⚠️ 移除 Lat/Lon 參數傳遞
                         })
             
             # 🚀 快速進入商家後台 
@@ -374,10 +369,18 @@ else:
         st.stop()
 
     # --- 篩選器 ---
-    col_filter_1, col_filter_2, col_filter_3 = st.columns([1, 1, 3])
+    col_filter_1, col_filter_2, col_filter_3, col_filter_4 = st.columns([1, 1, 1, 2]) # 增加預算區間欄位
 
+    # 獲取所有店家的價格範圍
+    all_prices = [v['price'] for v in SHOPS_DB.values() if isinstance(v['price'], int)]
+    min_price = int(np.min(all_prices)) if all_prices else 0
+    max_price = int(np.max(all_prices)) if all_prices else 100
+    if max_price == min_price: max_price += 10 # 防止單一價格導致的 slider 錯誤
+    
+    
     with col_filter_1:
         # Level 1: 行政區篩選
+        all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
         unique_main_regions = sorted(list(set([r.split(' - ')[0].strip() for r in all_regions if ' - ' in r])))
         selected_main_region = st.selectbox(
             "📍 行政區", 
@@ -395,7 +398,6 @@ else:
     sub_regions = ["所有社區"]
     
     if main_filter_key != "所有區域":
-        # 獲取符合 Level 1 的所有 Level 2 社區名稱
         sub_regions_raw = [r.split(' - ')[1].strip() for r in all_regions if r.startswith(main_filter_key)]
         sub_regions = ["所有社區"] + sorted(list(set(sub_regions_raw)))
 
@@ -410,33 +412,50 @@ else:
                 target_shop_select=None 
             )
         )
+        
+    with col_filter_3:
+        # Level 3: 預算區間篩選 (新功能)
+        budget_range = st.slider(
+            "💲 預算區間",
+            min_value=min_price,
+            max_value=max_price,
+            value=(min_price, max_price),
+            step=10,
+            key="budget_range"
+        )
+
 
     # --- 執行最終篩選 ---
     final_filtered_shops = {}
     
+    # 1. 執行地區篩選
     if main_filter_key == "所有區域":
-        final_filtered_shops = SHOPS_DB
+        temp_shops = SHOPS_DB
     else:
-        # 先按 Level 1 篩選
         temp_shops = {k: v for k, v in SHOPS_DB.items() if v['region'].startswith(main_filter_key)}
         
         sub_filter_key = clean_region_name(selected_sub_region)
         
-        if sub_filter_key == "所有社區":
-            final_filtered_shops = temp_shops
-        else:
-            # 按完整的 [行政區 - 社區名] 進行篩選
+        if sub_filter_key != "所有社區":
             full_filter_string = f"{main_filter_key} - {sub_filter_key}"
-            final_filtered_shops = {k: v for k, v in temp_shops.items() if v['region'] == full_filter_string}
+            temp_shops = {k: v for k, v in temp_shops.items() if v['region'] == full_filter_string}
+
+    # 2. 執行價格篩選
+    min_b, max_b = budget_range
+    final_filtered_shops = {
+        k: v for k, v in temp_shops.items() 
+        if v['price'] >= min_b and v['price'] <= max_b
+    }
 
     
     if not final_filtered_shops and main_filter_key != "所有區域":
-        st.warning(f"🚨 警告：選定區域 **{main_filter_key}** 下找不到店家。請檢查 Google Sheet 中的地區名稱是否完全一致。")
+        with col_filter_4:
+            st.warning(f"🚨 警告：選定區域 **{main_filter_key}** 下找不到店家。")
     
     
     # 移除地圖顯示
-    with col_filter_3:
-        st.caption("請在左側選單篩選區域，下方查看店家清單。")
+    with col_filter_4:
+        st.caption(f"目前顯示 {len(final_filtered_shops)} 個店家。")
 
     st.divider()
 
@@ -458,7 +477,7 @@ else:
     # 顯示列表
     cols_per_row = 3
     if len(shops_with_status) == 0:
-        st.info(f"在選定的區域內沒有找到任何店家。")
+        st.info(f"在選定的區域和預算範圍內沒有找到任何店家。")
     else:
         cols = st.columns(cols_per_row)
         
@@ -486,7 +505,6 @@ else:
 
                 # 1. 顯示卡片內容
                 with st.container(border=border_color): 
-                    # ⚠️ 顯示完整的地區名稱
                     st.markdown(f"**🏪 {name}** ({info['region']})") 
                     st.markdown(f"**{status['status_text']}**")
                     
@@ -572,7 +590,7 @@ else:
             st.warning(f"{target_shop_name} 目前已售完或休息中。")
             
     elif st.session_state['target_shop_select'] and st.session_state['target_shop_select'] not in final_filtered_shops:
-        st.warning("您選擇的店家不在當前區域篩選結果中，請重新選擇。")
+        st.warning("您選擇的店家不在當前篩選結果中，請重新選擇。")
         st.session_state['target_shop_select'] = None
     
     else:
