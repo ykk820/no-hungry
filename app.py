@@ -407,13 +407,11 @@ else:
                 # --- 呼叫 Streamlit 內建的寫入邏輯 ---
                 if submitted:
                     
-                    # 修正：如果選擇的是手動輸入框，則取手動輸入的值
-                    if 'new_region_select' not in st.session_state and 'new_region_manual' in st.session_state:
-                         submitted_region = st.session_state['new_region_manual']
-                    elif 'new_region_select' in st.session_state:
+                    # 修正：確保取得的是 selectbox 或 text_input 的值
+                    if all_existing_regions:
                          submitted_region = st.session_state['new_region_select']
                     else:
-                         submitted_region = ""
+                         submitted_region = st.session_state['new_region_manual']
                          
                     cleaned_region_name = clean_region_name(submitted_region)
                     
@@ -425,11 +423,11 @@ else:
                         # 執行寫入
                         add_shop_to_sheet({
                             "shop_name": new_shop_name,
-                            "region": cleaned_region_name, # 自由輸入的地區名
+                            "region": cleaned_region_name, 
                             "item": new_item,
                             "price": new_price,
                             "stock": new_stock,
-                            "mode": new_mode, # 固定為剩食
+                            "mode": new_mode, 
                         })
             
             # 🚀 快速進入商家後台 
@@ -559,11 +557,13 @@ else:
 
     
     if not final_filtered_shops:
-        st.warning(f"🚨 警告：選定條件下找不到剩食。")
+        with col_filter_3:
+            st.warning(f"🚨 警告：選定條件下找不到剩食。")
     
     
     # 顯示店家計數
-    st.caption(f"目前顯示 {len(final_filtered_shops)} 個店家。")
+    with col_filter_3:
+        st.caption(f"目前顯示 {len(final_filtered_shops)} 個店家。")
 
     st.divider()
 
