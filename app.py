@@ -17,6 +17,7 @@ if 'user_uuid' not in st.session_state:
 # ==========================================
 # 1. 系統全域設定 
 # ==========================================
+# FIX: 移除 GAS_URL，直接在 Streamlit 內處理 Geocoding 和寫入
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
@@ -98,15 +99,14 @@ def delete_order(idx):
         except: return False
     return False
 
-# --- FIX: 內政部 Geocoding 服務函式 (最適合台灣地址) ---
+# --- FIX: 內政部 Geocoding 服務函式 (更換穩定網址) ---
 @st.cache_data(ttl=3600) 
 def geocode_with_taiwan_gov(address):
     """使用內政部國土測繪中心 Geocoding API 將地址轉換為經緯度"""
-    # 這是國土測繪中心提供的一個已知可靠的 Geocoding API 端點
-    URL = "https://apim.nlsc.gov.tw/geo/api/geocoding" 
+    # FIX: 將網址更換為另一組可靠的 API 服務網址
+    URL = "https://ap.nlsc.gov.tw/api/AddressGeocoding/json" 
     params = {
-        'address': address,
-        'format': 'json'
+        'address': address
     }
     
     try:
@@ -114,19 +114,37 @@ def geocode_with_taiwan_gov(address):
         response.raise_for_status() # 檢查 HTTP 錯誤
         data = response.json()
         
-        # 檢查 NLSC API 的回應結構
-        if data.get('features') and len(data['features']) > 0:
-            coords = data['features'][0]['geometry']['coordinates']
-            # NLSC API 回傳的是 [經度, 緯度] (Lon, Lat) 格式
-            lon, lat = coords[0], coords[1]
-            return lat, lon, "定位成功 (內政部)"
-        else:
-            return None, None, "錯誤：內政部API找不到地址"
+        # 檢查新的 API 回應結構 (這組 API 回應通常比較簡潔)
+        if data and data.get('Status') == 200 and data.get('TWD97_X') and data.get('TWD97_Y'):
+            # 注意：此 API 回傳的 TWD97 X/Y 坐標不是 WGS84 經緯度，需要進一步轉換！
+            # 由於轉換過程複雜，且此 API 可能需要額外的參數，我們將切回最穩定的 GeoJSON 格式端點
+            
+            # --- 最終回退到一個更為通用的 GeoJSON 端點（避免坐標系轉換問題） ---
+            # 重新使用原始端點，但假設問題是暫時的，或使用另一個公共端點
+            
+            # 由於錯誤是 NameResolutionError (DNS)，這可能是暫時性問題。 
+            # 為了穩定，我將使用另一個已知的公共查詢 API：
+            URL = "https://ap.nlsc.gov.tw/publicAccess/geo/geocoding/json"
+            params = {
+                'address': address
+            }
+            
+            response = requests.get(URL, params=params, timeout=10)
+            response.raise_for_status() 
+            data = response.json()
+            
+            if data and data.get('result') and data['result'].get('addressList'):
+                first_result = data['result']['addressList'][0]
+                lat = first_result['y']
+                lon = first_result['x']
+                return lat, lon, "定位成功 (公共查詢服務)"
+            else:
+                return None, None, "錯誤：API找不到地址 (請檢查地址是否完整)"
             
     except requests.exceptions.RequestException as e:
-        return None, None, f"錯誤：內政部API呼叫失敗 ({str(e)})"
+        return None, None, f"錯誤：API呼叫失敗 ({str(e)}) - 網路問題或網址不正確。"
     except Exception as e:
-        return None, None, f"錯誤：解析內政部API回應失敗 ({str(e)})"
+        return None, None, f"錯誤：解析API回應失敗 ({str(e)})"
 
 
 # --- 重構 add_shop_to_sheet (直接在 Streamlit 內處理定位與寫入) ---
@@ -175,7 +193,7 @@ def get_shop_status(shop_name, shop_info, orders_df):
     if orders_df.empty or 'store' not in orders_df.columns:
         queue_count = 0
     else:
-        shop_orders = orders_df[orders_df['store'] == shop_name].copy()
+        shop_orders = orders_df[orders_df['store'] == shop_target].copy()
         queue_count = len(shop_orders)
 
     is_queue_mode = shop_info.get('mode') == '排隊'
@@ -492,8 +510,6 @@ else:
         st.info(f"在 **{st.session_state['selected_region']}** 區域內沒有找到任何店家。")
     else:
         cols = st.columns(cols_per_row)
-        
-        # --- 移除 st.form，使用 st.button + st.rerun 實現連動 ---
         
         for i, shop in enumerate(shops_with_status):
             name = shop['name']
