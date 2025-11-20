@@ -18,6 +18,8 @@ if 'admin_login_visible' not in st.session_state:
     st.session_state['admin_login_visible'] = False
 if 'target_shop_select' not in st.session_state:
      st.session_state['target_shop_select'] = None
+if 'admin_share_percent' not in st.session_state: 
+    st.session_state['admin_share_percent'] = 10.0
 
 
 # ==========================================
@@ -26,22 +28,11 @@ if 'target_shop_select' not in st.session_state:
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
-# --- 區域標準化名稱 (格式：[行政區] - [社區名]) ---
-SUGGESTED_REGIONS_FULL = [
-    '新北市淡水區 - 淡江大學',
-    '新北市淡水區 - 金雞母/水源街',
-    '新北市淡水區 - 大田寮',
-    '新北市淡水區 - 英專路/老街',
-    '新北市淡水區 - 淡海新市鎮',
-    '新北市淡水區 - 紅樹林/竹圍',
-]
-TAMKANG_PREFIX = '新北市淡水區'
-
 # ==========================================
 # 2. 資料庫連線函式與服務 
 # ==========================================
 
-# --- 地區名稱清理函式 ---
+# --- 地區名稱清理函式 (保持，用於確保篩選字串乾淨) ---
 def clean_region_name(name):
     """移除前後空白並替換常見的特殊空白符號，用於保證篩選比對成功"""
     if isinstance(name, str):
@@ -73,12 +64,14 @@ def load_data():
             shops_db = {}
             for row in raw_shops:
                 name = str(row.get('店名', '')).strip()
-                if name:
+                status = str(row.get('狀態', 'Active')).strip()
+                
+                if name and status.lower() == 'active': # 僅載入 Active 的店家
                     cleaned_region = clean_region_name(row.get('地區', '未分類'))
                     
                     shops_db[name] = {
                         'region': cleaned_region, 
-                        'mode': '剩食', # 强制设为剩食模式
+                        'mode': '剩食', 
                         'item': str(row.get('商品', '優惠商品')),
                         'price': int(row.get('價格', 0) or 0),
                         'stock': int(row.get('初始庫存', 0) or 0)
@@ -107,36 +100,7 @@ def delete_order(idx):
             return False
     return False
 
-# --- FIX: 更新店家庫存 (用於專屬後台) ---
-def update_shop_stock(shop_name, new_stock_value):
-    client = get_client()
-    if not client:
-        st.error("更新失敗：無法連線至數據庫。")
-        return False
-    
-    try:
-        ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
-        
-        # 尋找目標店名在哪一行 (從第二行開始找，排除標題)
-        cell = ws.find(shop_name, in_column=1) 
-        if cell is None:
-            st.error("更新失敗：數據庫中找不到該店名。")
-            return False
-        
-        # 庫存欄位是第 8 欄 ('初始庫存'，A=1, B=2, ..., H=8)
-        ws.update_cell(cell.row, 8, new_stock_value) 
-        
-        st.success(f"📦 {shop_name} 的總庫存已更新為 {new_stock_value} 份。")
-        st.cache_data.clear() # 清除快取
-        st.rerun()
-        return True
-
-    except Exception as e:
-        st.error(f"更新失敗：寫入數據庫時發生錯誤 ({e})。")
-        return False
-
-
-# --- 簡化後的店家新增函式 (移除 Lat/Lon 參數) ---
+# --- 簡化後的店家新增函式 (只傳遞核心數據) ---
 def add_shop_to_sheet(data):
     
     client = get_client()
@@ -144,16 +108,17 @@ def add_shop_to_sheet(data):
         st.error("店家新增失敗。無法連線至數據庫。")
         return False
 
-    # 準備寫入資料 (Lat/Lon 欄位填 0)
+    # 準備寫入資料 (Lat/Lon 欄位填 0，狀態填 Active)
     new_row = [
         data['shop_name'], 
-        data['region'], # 結構：行政區 - 社區名
+        data['region'], 
         data['mode'], 
         0, # 緯度 (佔位)
         0, # 經度 (佔位)
         data['item'], 
         data['price'], 
-        data['stock']
+        data['stock'],
+        'Active' # 狀態
     ]
 
     # 執行寫入
@@ -180,7 +145,7 @@ def get_shop_status(shop_name, shop_info, orders_df):
              queue_count = 0
 
 
-    is_queue_mode = False # ⚠️ 永遠設為 False (剩食模式)
+    is_queue_mode = False 
     current_stock = shop_info['stock'] - queue_count
     if current_stock < 0: current_stock = 0
 
@@ -203,7 +168,7 @@ def get_shop_status(shop_name, shop_info, orders_df):
 # ==========================================
 # 3. 頁面開始
 # ==========================================
-st.set_page_config(page_title="餓不死清單", page_icon="🍱", layout="wide") # 更改頁面標題
+st.set_page_config(page_title="餓不死清單", page_icon="🍱", layout="wide") 
 
 SHOPS_DB, ALL_ORDERS = load_data()
 
@@ -234,8 +199,8 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
         st.divider()
         st.link_button("📄 開啟數據庫", f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit", help="（僅供主管理員參考）")
         st.divider()
-        
-        # --- FIX: 店家專屬庫存調整面板 ---
+
+        # --- 店家專屬庫存調整面板 ---
         st.subheader("📦 調整今日總庫存")
         with st.form("stock_update_form"):
             current_stock_value = shop_info.get('stock', 0)
@@ -247,7 +212,23 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
             )
             if st.form_submit_button("💾 確認更新庫存"):
                 if new_stock != current_stock_value:
-                    update_shop_stock(shop_target, new_stock)
+                    client = get_client()
+                    if client:
+                        try:
+                            ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
+                            cell = ws.find(shop_target, in_column=1) 
+                            if cell:
+                                # 假設 '初始庫存' 在第 8 欄
+                                ws.update_cell(cell.row, 8, new_stock) 
+                                st.success(f"📦 總庫存已更新為 {new_stock} 份。")
+                                st.cache_data.clear() 
+                                st.rerun()
+                            else:
+                                st.error("數據庫中找不到該店名。")
+                        except Exception as e:
+                            st.error(f"更新失敗：寫入數據庫時發生錯誤 ({e})。")
+                    else:
+                        st.error("更新失敗：無法連線至數據庫。")
                 else:
                     st.warning("庫存數量未改變。")
         # --- FIX END ---
@@ -318,12 +299,59 @@ else:
             st.link_button("📄 開啟數據庫", f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit", help="直接編輯 Google Sheet 數據庫")
             st.divider()
         
-        # 獲取所有地區和模式選項
-        all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
-        
-        # --- 管理員新增店家表單邏輯 (只有登入後才顯示) ---
-        if is_admin:
+            # 獲取所有地區和模式選項
+            all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
             
+            # --- 啟用/停用店家功能 (關閉合作) ---
+            st.subheader("🛑 合作管理 (啟用/停用)")
+            if SHOPS_DB:
+                shop_to_manage = st.selectbox("選擇要管理的店家", list(SHOPS_DB.keys()))
+                
+                status_opts = ["Active", "Inactive"]
+                # 假設 Google Sheet 中 '狀態' 欄位是第 9 欄
+                current_status = "Active" 
+                new_status = st.selectbox("設定新狀態", status_opts, index=0 if current_status == "Active" else 1)
+                
+                if st.button("🔄 更新店家狀態", type="primary"):
+                    update_shop_status(shop_to_manage, new_status)
+            else:
+                st.info("數據庫中沒有店家可供管理。")
+            
+            st.divider()
+            
+            # --- 財務追蹤面板 (抽成比例與計算) ---
+            st.subheader("💰 收入追蹤")
+            
+            # 輸入抽成比例
+            share_percent = st.number_input(
+                "您的抽成比例 (%)", 
+                min_value=0.0, 
+                max_value=100.0, 
+                value=st.session_state['admin_share_percent'],
+                key="share_percent_input"
+            )
+            st.session_state['admin_share_percent'] = share_percent
+            
+            total_claimed_revenue = 0
+            total_items_claimed = len(ORDERS_DF)
+            
+            # 計算總收入
+            if not ORDERS_DF.empty:
+                for _, order_row in ORDERS_DF.iterrows():
+                    shop_name = order_row['store']
+                    if shop_name in SHOPS_DB:
+                        price = SHOPS_DB[shop_name]['price']
+                        total_claimed_revenue += price
+            
+            admin_share_value = total_claimed_revenue * (share_percent / 100)
+            
+            st.metric("✅ 總領取訂單數", total_items_claimed)
+            st.metric("💲 預計總銷售額", f"${total_claimed_revenue}")
+            st.metric("💰 應抽收入 (預估)", f"${admin_share_value:,.2f}")
+            
+            st.divider()
+            
+            # --- 管理員新增店家表單邏輯 ---
             st.subheader("➕ 新增店家")
             st.caption("經緯度將設為 0, 0。")
             with st.form("add_shop_form"):
@@ -357,7 +385,7 @@ else:
                         # 執行寫入
                         add_shop_to_sheet({
                             "shop_name": new_shop_name,
-                            "region": cleaned_region_name, # 寫入格式：行政區 - 社區名
+                            "region": cleaned_region_name, # 自由輸入的地區名
                             "item": new_item,
                             "price": new_price,
                             "stock": new_stock,
@@ -377,27 +405,12 @@ else:
             else:
                  st.info("目前數據庫中沒有任何店家數據。")
                 
+            # --- FIX: 批量二維碼生成邏輯 ---
             st.divider()
             st.subheader("📱 批量二維碼")
+            if st.button("查看所有二維碼"):
+                st.session_state['show_bulk_qr'] = True
             
-            # 顯示所有店家的二維碼
-            if SHOPS_DB:
-                
-                st.subheader("所有店家二維碼連結")
-                qr_cols = st.columns(5) # 創建列來顯示二維碼
-
-                for i, (name, info) in enumerate(SHOPS_DB.items()):
-                    shop_link = f"{BASE_APP_URL}/?mode=shop&name={urllib.parse.quote(str(name))}"
-                    qr_img_url = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}"
-                    
-                    with qr_cols[i % 5]:
-                        st.markdown(f"**{name}** ({info['region'].split(' - ')[-1]})")
-                        st.image(qr_img_url, caption=f"掃描進入看板", width=120)
-                        st.caption(f"連結: [Link]({shop_link})")
-                        st.write("---") # 分隔線
-            else:
-                st.caption("請先在數據庫中新增店家資料。")
-
             if st.button("清除應用程式快取"):
                 st.cache_data.clear()
                 st.rerun()
@@ -410,6 +423,43 @@ else:
     if not SHOPS_DB:
         st.warning("⚠️ 數據庫正在載入中或無法連線，請稍後重試。")
         st.stop()
+        
+    # --- 批量二維碼生成區塊 (管理員登入後顯示) ---
+    if is_admin and st.session_state.get('show_bulk_qr'):
+        st.header("📱 所有店家二維碼連結 (批量)")
+        if SHOPS_DB:
+            
+            # 將所有店家數據按地區分組
+            shops_by_region = {}
+            for name, info in SHOPS_DB.items():
+                region = info['region']
+                if region not in shops_by_region:
+                    shops_by_region[region] = {}
+                shops_by_region[region][name] = info
+
+            # 依地區迭代顯示
+            sorted_regions = sorted(shops_by_region.keys())
+            for region_name in sorted_regions:
+                st.subheader(f"區域：{region_name}")
+                
+                qr_cols = st.columns(5)
+                for i, (name, info) in enumerate(shops_by_region[region_name].items()):
+                    shop_link = f"{BASE_APP_URL}/?mode=shop&name={urllib.parse.quote(str(name))}"
+                    qr_img_url = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}"
+                    
+                    with qr_cols[i % 5]:
+                        st.markdown(f"**{name}**")
+                        st.image(qr_img_url, caption=f"掃描進入看板", width=120)
+                        st.caption(f"連結: [Link]({shop_link})")
+                        st.write("---")
+            
+            if st.button("返回主頁"):
+                st.session_state['show_bulk_qr'] = False
+                st.rerun()
+
+            st.stop() # 停止執行後續的消費者介面
+    # --- END 批量二維碼生成區塊 ---
+
 
     # --- 篩選器 (單層地區篩選 + 預算) ---
     
@@ -500,48 +550,63 @@ else:
     if len(shops_with_status) == 0:
         st.info(f"在選定的地區和預算範圍內沒有找到任何剩食項目。")
     else:
-        cols = st.columns(cols_per_row)
         
-        for i, shop in enumerate(shops_with_status):
-            name = shop['name']
-            info = shop['info']
-            status = shop['status']
+        # 依地區分組顯示 (消費者介面)
+        shops_by_region_consumer = {}
+        for name, status_info in final_filtered_shops.items(): # 使用 final_filtered_shops
+            region = status_info['region']
+            if region not in shops_by_region_consumer:
+                shops_by_region_consumer[region] = {}
             
-            user_is_in_queue = False
-            if not ORDERS_DF.empty and 'user_id' in ORDERS_DF.columns and 'store' in ORDERS_DF.columns:
-                my_queue = ORDERS_DF[(ORDERS_DF['user_id'] == st.session_state['user_uuid']) & (ORDERS_DF['store'] == name)]
-                if not my_queue.empty:
-                    user_is_in_queue = True
-
-            with cols[i % cols_per_row]:
+            # 將完整的 shop_info 加入字典
+            shops_by_region_consumer[region][name] = status_info
+            
+        sorted_regions_consumer = sorted(shops_by_region_consumer.keys())
+        
+        for region_name in sorted_regions_consumer:
+            st.markdown(f"### {region_name} 區域 ({len(shops_by_region_consumer[region_name])} 店)")
+            
+            cols = st.columns(cols_per_row)
+            
+            for i, (name, info) in enumerate(shops_by_region_consumer[region_name].items()):
                 
-                border_color = True
-                if st.session_state['target_shop_select'] == name:
-                    border_color = "green" 
+                status = get_shop_status(name, info, ORDERS_DF)
+                
+                user_is_in_queue = False
+                if 'user_id' in ORDERS_DF.columns and 'store' in ORDERS_DF.columns:
+                    my_queue = ORDERS_DF[(ORDERS_DF['user_id'] == st.session_state['user_uuid']) & (ORDERS_DF['store'] == name)]
+                    if not my_queue.empty:
+                        user_is_in_queue = True
 
-                # 1. 顯示卡片內容
-                with st.container(border=border_color): 
-                    st.markdown(f"**🏪 {name}** ({info['region']})") 
-                    st.markdown(f"**{status['status_text']}**")
+                with cols[i % cols_per_row]:
                     
-                    st.caption(f"項目：{info['item']} | 價格：**${info['price']}**")
+                    border_color = True
+                    if st.session_state['target_shop_select'] == name:
+                        border_color = "green" 
 
-                    if user_is_in_queue:
-                        st.success(f"🎉 **您已成功領取！**")
-                            
-                # 2. 顯示按鈕 (使用普通的 st.button)
-                if status['is_available']:
-                    if st.button(
-                        f"選擇 {name} 領取", 
-                        type="primary" if st.session_state['target_shop_select'] != name else "secondary",
-                        use_container_width=True,
-                        key=f"select_btn_{name}" 
-                    ):
-                        st.session_state['target_shop_select'] = name
-                        st.rerun() # 立即重新執行，實現連動
+                    # 1. 顯示卡片內容
+                    with st.container(border=border_color): 
+                        st.markdown(f"**🏪 {name}**") 
+                        st.markdown(f"**{status['status_text']}**")
                         
-                else:
-                    st.button("❌ 已領取完畢", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
+                        st.caption(f"項目：{info['item']} | 價格：**${info['price']}**")
+
+                        if user_is_in_queue:
+                            st.success(f"🎉 **您已成功領取！**")
+                                
+                    # 2. 顯示按鈕 (使用普通的 st.button)
+                    if status['is_available']:
+                        if st.button(
+                            f"選擇 {name} 領取", 
+                            type="primary" if st.session_state['target_shop_select'] != name else "secondary",
+                            use_container_width=True,
+                            key=f"select_btn_{name}" 
+                        ):
+                            st.session_state['target_shop_select'] = name
+                            st.rerun() # 立即重新執行，實現連動
+                            
+                    else:
+                        st.button("❌ 已領取完畢", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
             
     # --- 4. 詳細領取區塊 ---
     
