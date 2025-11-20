@@ -100,6 +100,32 @@ def delete_order(idx):
             return False
     return False
 
+# --- 啟用/停用店家功能 (關閉合作) ---
+def update_shop_status(shop_name, new_status):
+    client = get_client()
+    if not client:
+        st.error("更新失敗：無法連線至數據庫。")
+        return False
+    
+    try:
+        ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
+        cell = ws.find(shop_name, in_column=1) 
+        if cell is None:
+            st.error("更新失敗：數據庫中找不到該店名。")
+            return False
+        
+        # ⚠️ 假設 '狀態' 在第 9 欄 (I 欄)
+        ws.update_cell(cell.row, 9, new_status) 
+        
+        st.success(f"🚨 {shop_name} 的合作狀態已更新為 **{new_status}**。")
+        st.cache_data.clear() 
+        st.rerun()
+        return True
+
+    except Exception as e:
+        st.error(f"更新失敗：寫入數據庫時發生錯誤 ({e})。")
+        return False
+
 # --- 簡化後的店家新增函式 (只傳遞核心數據) ---
 def add_shop_to_sheet(data):
     
@@ -391,7 +417,7 @@ else:
                          
                     cleaned_region_name = clean_region_name(submitted_region)
                     
-                    if not all([new_shop_name, cleaned_region_name]): 
+                    if not all([new_shop_name, cleaned_region_name]): # 檢查必要的欄位
                         st.error("店名、地區不可為空！")
                     elif cleaned_region_name == "請在此輸入第一個地區名稱":
                         st.error("請輸入有效的地區名稱。")
@@ -399,11 +425,11 @@ else:
                         # 執行寫入
                         add_shop_to_sheet({
                             "shop_name": new_shop_name,
-                            "region": cleaned_region_name, # 自由輸入的地區名
+                            "region": cleaned_region_name, 
                             "item": new_item,
                             "price": new_price,
                             "stock": new_stock,
-                            "mode": new_mode, # 固定為剩食
+                            "mode": new_mode, 
                         })
             
             # 🚀 快速進入商家後台 
@@ -600,12 +626,12 @@ else:
 
                 with cols[i % cols_per_row]:
                     
-                    border_color = True
-                    if st.session_state['target_shop_select'] == name:
-                        border_color = "green" 
+                    # ⚠️ FIX: 修正 Line 634 處的 border 參數
+                    # 邊框只有在 'target_shop_select' == name 時才顯示
+                    is_selected_border = st.session_state['target_shop_select'] == name
 
                     # 1. 顯示卡片內容
-                    with st.container(border=border_color): 
+                    with st.container(border=is_selected_border): 
                         st.markdown(f"**🏪 {name}**") 
                         st.markdown(f"**{status['status_text']}**")
                         
