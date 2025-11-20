@@ -21,6 +21,16 @@ GAS_URL = "https://script.google.com/macros/s/AKfycbz0ltqrGDA1nwXoqchQ-bTHNIW5jD
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
+# --- 新增：淡江大學周邊的建議/標準化區域名稱 ---
+SUGGESTED_REGIONS = [
+    '淡江大學',
+    '金雞母/水源街',
+    '大田寮',
+    '英專路/老街',
+    '淡海新市鎮',
+    '紅樹林/竹圍'
+]
+
 # ==========================================
 # 2. 資料庫連線函式 (FIXED: 加強地區名稱清理)
 # ==========================================
@@ -161,7 +171,11 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
         st.title(f"🏪 {shop_target}")
         if st.button("⬅️ 登出 (回首頁)"):
             st.query_params.clear() 
-            st.rerun() # 確保切換回 consumer mode
+            st.rerun() 
+            
+        st.divider()
+        st.link_button("📄 開啟 Google Sheet", f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit", help="直接編輯數據庫")
+        st.divider()
 
     st.title(f"📊 實時銷售看板 - {shop_target}")
     
@@ -222,13 +236,20 @@ else:
         
         if is_admin:
             st.success("已登入")
+            st.link_button("📄 開啟 Google Sheet", f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit", help="直接編輯數據庫")
             st.divider()
+        
+        # 獲取所有地區和模式選項
+        all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
+        
+        # --- 管理員新增店家表單邏輯 ---
+        if is_admin:
+            # 整合建議區域到管理員新增介面
+            region_options_base = sorted(list(set(SUGGESTED_REGIONS + all_regions)))
+            new_region_options = ["新增區域..."] + region_options_base
             
-            # 獲取所有地區和模式選項
-            all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
-            
-            # 🚀 🆕 一鍵新增店家表單 (改為下拉選單)
-            st.subheader("➕ 一鍵新增店家 (自動定位)")
+            st.subheader("➕ 一鍵新增店家 (標準化區域)")
+            st.caption("建議選擇清單中的標準化區域名稱")
             with st.form("add_shop_form"):
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -236,11 +257,14 @@ else:
                     new_item = st.text_input("商品名*", key="new_item", value="剩食套餐")
                     new_price = st.number_input("價格*", min_value=1, value=50)
                 with col_b:
-                    new_address = st.text_input("完整地址*", key="new_address", help="範例：新北市淡水區英專路15號")
+                    new_address = st.text_input("完整地址*", key="new_address", help="範例：新北市淡水區英專路15號 (將用於自動定位)")
                     
-                    # FIX: 區域改為下拉選單，並允許手動輸入
-                    new_region_options = ["新增區域..."] + all_regions
-                    selected_region_input = st.selectbox("選擇或輸入區域*", new_region_options, index=new_region_options.index("新增區域...") if "新增區域..." in new_region_options else 0)
+                    selected_region_input = st.selectbox(
+                        "選擇或輸入區域*", 
+                        new_region_options, 
+                        index=new_region_options.index("新增區域...") if "新增區域..." in new_region_options else 0
+                    )
+                    
                     if selected_region_input == "新增區域...":
                         new_region = st.text_input("輸入新區域名稱", key="new_region_manual", value="淡江大學")
                     else:
@@ -248,7 +272,6 @@ else:
                         
                     new_stock = st.number_input("初始庫存", min_value=1, value=10)
                 
-                # FIX: 模式改為下拉選單
                 new_mode_options = ['剩食', '排隊']
                 new_mode = st.selectbox("營運模式", new_mode_options, index=new_mode_options.index('剩食'))
                 
@@ -262,7 +285,7 @@ else:
                         result = add_shop_to_backend({
                             "shop_name": new_shop_name,
                             "address": new_address,
-                            "region": cleaned_region_name, # 使用清理後的區域名稱
+                            "region": cleaned_region_name, 
                             "item": new_item,
                             "price": new_price,
                             "stock": new_stock,
@@ -311,9 +334,8 @@ else:
     
     # 設置預設區域為 "淡江大學" 或 "所有區域"
     if "淡江大學" in all_regions:
-         default_region_index = all_regions.index("淡江大學") + 1 # +1 因為有 "所有區域"
+         default_region_index = all_regions.index("淡江大學") + 1 
 
-    # 初始化 session state
     if 'selected_region' not in st.session_state:
         st.session_state['selected_region'] = "所有區域"
     if 'target_shop_select' not in st.session_state:
@@ -323,7 +345,6 @@ else:
     col_filter_1, col_filter_2 = st.columns([1, 4])
 
     with col_filter_1:
-        # FIX: 使用 on_change 確保選單變動時連動
         selected_region = st.selectbox(
             "📍 請選擇區域", 
             ["所有區域"] + all_regions,
@@ -331,11 +352,16 @@ else:
             key="region_selectbox",
             on_change=lambda: st.session_state.update(
                 selected_region=st.session_state.region_selectbox,
-                target_shop_select=None # 清空目標店家
+                target_shop_select=None 
             )
         )
-    
-    # 根據選定的區域進行篩選
+        
+        # --- 數據驗證區塊 (Sheet 連結 Map) ---
+        with st.expander("🔬 檢查地圖數據"):
+             st.caption("顯示地圖上正在使用的店家資料")
+             show_data_map = st.checkbox("顯示原始地圖數據", value=False)
+
+
     cleaned_selected_region = clean_region_name(st.session_state['selected_region'])
 
     if cleaned_selected_region == "所有區域":
@@ -344,7 +370,6 @@ else:
         # 篩選邏輯：比對 load_data 時已經清理過的 'region' 值
         filtered_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == cleaned_selected_region}
     
-    # 如果篩選後沒有店家，顯示警告
     if not filtered_shops and cleaned_selected_region != "所有區域":
         st.warning(f"🚨 警告：選定區域 **{st.session_state['selected_region']}** 下找不到店家。請檢查 Google Sheet 中的地區名稱是否完全一致。")
     
@@ -375,7 +400,10 @@ else:
             zoom=map_zoom, 
             use_container_width=True
         )
-    
+        # --- 在地圖旁顯示數據驗證表 ---
+        if show_data_map and not map_df.empty:
+            st.dataframe(map_df, use_container_width=True, height=200)
+
     st.divider()
 
     # --- 顯示人潮多寡列表與連動選擇 ---
@@ -388,7 +416,6 @@ else:
         status = get_shop_status(name, info, ORDERS_DF)
         shops_with_status.append({'name': name, 'info': info, 'status': status})
     
-    # 排序邏輯 
     shops_with_status.sort(key=lambda x: (
         not x['status']['is_available'], 
         x['status']['is_queue_mode'],    
@@ -397,71 +424,70 @@ else:
     
     # 顯示列表
     cols_per_row = 3
-    cols = st.columns(cols_per_row)
-    
-    # --- 使用 Form 確保點擊連動穩定性 ---
-    with st.form("shop_list_form"):
+    if len(shops_with_status) == 0:
+        st.info(f"在 **{st.session_state['selected_region']}** 區域內沒有找到任何店家。")
+    else:
+        cols = st.columns(cols_per_row)
         
-        for i, shop in enumerate(shops_with_status):
-            name = shop['name']
-            info = shop['info']
-            status = shop['status']
+        # --- 使用 Form 確保點擊連動穩定性 ---
+        with st.form("shop_list_form"):
             
-            user_is_in_queue = False
-            my_queue_number = 0
-            if not ORDERS_DF.empty and 'user_id' in ORDERS_DF.columns and 'store' in ORDERS_DF.columns:
-                my_queue = ORDERS_DF[(ORDERS_DF['user_id'] == st.session_state['user_uuid']) & (ORDERS_DF['store'] == name)]
-                if not my_queue.empty:
-                    user_is_in_queue = True
-                    shop_orders = ORDERS_DF[ORDERS_DF['store'] == name]
-                    my_order_index = my_queue.index[0]
-                    my_queue_number = len(shop_orders[shop_orders.index <= my_order_index])
-
-
-            with cols[i % cols_per_row]:
+            for i, shop in enumerate(shops_with_status):
+                name = shop['name']
+                info = shop['info']
+                status = shop['status']
                 
-                # 判斷是否為當前選中的目標，如果是則高亮顯示
-                border_color = True
-                if st.session_state['target_shop_select'] == name:
-                    border_color = "green" 
+                user_is_in_queue = False
+                my_queue_number = 0
+                if not ORDERS_DF.empty and 'user_id' in ORDERS_DF.columns and 'store' in ORDERS_DF.columns:
+                    my_queue = ORDERS_DF[(ORDERS_DF['user_id'] == st.session_state['user_uuid']) & (ORDERS_DF['store'] == name)]
+                    if not my_queue.empty:
+                        user_is_in_queue = True
+                        shop_orders = ORDERS_DF[ORDERS_DF['store'] == name]
+                        my_order_index = my_queue.index[0]
+                        my_queue_number = len(shop_orders[shop_orders.index <= my_order_index])
 
-                with st.container(border=border_color):
-                    st.markdown(f"**🏪 {name}** ({info['region']})")
-                    st.markdown(f"**{status['status_text']}**")
+
+                with cols[i % cols_per_row]:
                     
-                    if status['is_queue_mode']:
-                        st.caption(f"模式：餐期排隊 | 叫號依據：**{info['item']}**")
-                    elif status['is_available']:
-                        st.caption(f"模式：剩食 | 價格：**${info['price']}**")
+                    border_color = True
+                    if st.session_state['target_shop_select'] == name:
+                        border_color = "green" 
 
-                    if user_is_in_queue:
-                        st.success(f"🎉 **您排在 {my_queue_number} 號！**")
+                    with st.container(border=border_color):
+                        st.markdown(f"**🏪 {name}** ({info['region']})")
+                        st.markdown(f"**{status['status_text']}**")
                         
-                    # --- 點擊按鈕：選擇店家並設置 session state ---
-                    if status['is_available']:
-                         if st.form_submit_button(
-                            f"選擇 {name} 進行下單", 
-                            type="primary" if st.session_state['target_shop_select'] != name else "secondary",
-                            use_container_width=True,
-                            key=f"select_btn_{name}" 
-                        ):
-                             # 設置目標店家，並在 Form 提交後重新執行
-                            st.session_state['target_shop_select'] = name
+                        if status['is_queue_mode']:
+                            st.caption(f"模式：餐期排隊 | 叫號依據：**{info['item']}**")
+                        elif status['is_available']:
+                            st.caption(f"模式：剩食 | 價格：**${info['price']}**")
+
+                        if user_is_in_queue:
+                            st.success(f"🎉 **您排在 {my_queue_number} 號！**")
                             
-                    else:
-                        st.button("休息中 / 已售完", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
-        
-    # --- 處理 Form 提交後的連動 ---
-    shop_selected_by_click = False
-    for shop in shops_with_status:
-        name = shop['name']
-        if st.session_state.get(f"select_btn_{name}"):
-            st.session_state[f"select_btn_{name}"] = False 
-            shop_selected_by_click = True
-            break
+                        if status['is_available']:
+                            if st.form_submit_button(
+                                f"選擇 {name} 進行下單", 
+                                type="primary" if st.session_state['target_shop_select'] != name else "secondary",
+                                use_container_width=True,
+                                key=f"select_btn_{name}" 
+                            ):
+                                st.session_state['target_shop_select'] = name
+                                
+                        else:
+                            st.button("休息中 / 已售完", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
             
-    if shop_selected_by_click:
-        st.rerun()
+        shop_selected_by_click = False
+        for shop in shops_with_status:
+            name = shop['name']
+            if st.session_state.get(f"select_btn_{name}"):
+                st.session_state[f"select_btn_{name}"] = False 
+                shop_selected_by_click = True
+                break
+                
+        if shop_selected_by_click:
+            st.rerun()
 
     # --- 4. 詳細下單/排隊區塊 ---
     
@@ -503,7 +529,7 @@ else:
                             st.success(f"下單成功！請前往 {target_shop_name} 取餐。")
                             st.balloons()
                             st.cache_data.clear()
-                            st.session_state['target_shop_select'] = None # 下單成功後，清空選擇
+                            st.session_state['target_shop_select'] = None 
                             st.rerun()
                         except: 
                             st.error("連線失敗")
