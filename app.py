@@ -9,7 +9,7 @@ import uuid
 # --- 新增 geopy 函式庫 ---
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError 
-from datetime import datetime # <<< 最終修正：補上 datetime 模組
+from datetime import datetime # 用於訂單寫入
 
 # ==========================================
 # 0. 設置唯一身份識別碼 (UUID)
@@ -20,7 +20,6 @@ if 'user_uuid' not in st.session_state:
 # ==========================================
 # 1. 系統全域設定 
 # ==========================================
-# FIX: 移除 GAS_URL，直接在 Streamlit 內處理 Geocoding 和寫入
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
@@ -514,7 +513,6 @@ else:
                             st.success(f"🎉 **您排在 {my_queue_number} 號！**")
                             
                     # 2. 顯示按鈕 (位於 with cols 內，確保在 st.form 作用域內)
-                    # FIX: 再次確認按鈕不在 st.container 內 (已在 Line 559 執行此分離)
                     if status['is_available']:
                         if st.form_submit_button(
                             f"選擇 {name} 進行下單", 
