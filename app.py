@@ -567,14 +567,16 @@ else:
                     with st.spinner("連線中..."):
                         try:
                             full_item = f"{target_shop_name} - {info['item']}"
-                            # 由於 GAS URL 已被移除，這裡的訂單邏輯需要被修改。
-                            # 為了不引入新的 gspread 寫入複雜性，我們暫時保留 requests 呼叫 GAS 的結構，
-                            # 但您必須將 'action': 'order' 邏輯轉移到 Streamlit App 或另一個服務。
-                            # 警告：如果您沒有修改 GAS 程式碼，此處會因為缺少 'GAS_URL' 而無法運行！
-                            st.error("警告：下單邏輯的 GAS 呼叫已停用，請自行將訂單寫入 Sheet 邏輯補上！")
-                            # --- 訂單邏輯應在於此 ---
                             
-                            # Example of direct gspread order writing (requires modifying the order sheet logic):
+                            # 注意：此處是訂單寫入邏輯的 placeholder。
+                            # 由於 GAS URL 已被移除，這裡的 requests.post 將會失敗！
+                            # 為了不中斷應用，您必須將訂單寫入邏輯轉為 gspread.append_row 
+                            # 寫入 "領取紀錄" 工作表。
+                            st.error("警告：訂單寫入邏輯需要修改！請將此處的 requests.post 替換為 gspread.append_row 寫入 '領取紀錄' 工作表。")
+                            
+                            # 示例 (需手動引入 datetime，並確保 client 可用):
+                            # from datetime import datetime
+                            # client = get_client() 
                             # ws_orders = client.open_by_key(SPREADSHEET_ID).worksheet("領取紀錄")
                             # new_order_row = [datetime.now().strftime('%Y-%m-%d %H:%M:%S'), st.session_state['user_uuid'], u_name, target_shop_name, full_item]
                             # ws_orders.append_row(new_order_row)
