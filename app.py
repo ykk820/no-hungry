@@ -62,36 +62,28 @@ def load_data():
             ws_shops = ss.worksheet("店家設定")
             raw_shops = ws_shops.get_all_records()
             shops_db = {}
-            # 必須讀取 inactive 的資料，以便管理員頁面顯示所有選項
-            full_shops_db = {} 
             for row in raw_shops:
                 name = str(row.get('店名', '')).strip()
                 status = str(row.get('狀態', 'Active')).strip()
                 
-                if name: # 讀取所有店家，但只將 Active 的放入 SHOPS_DB
+                if name and status.lower() == 'active': 
                     cleaned_region = clean_region_name(row.get('地區', '未分類'))
                     
-                    shop_data = {
+                    shops_db[name] = {
                         'region': cleaned_region, 
                         'mode': '剩食', 
                         'item': str(row.get('商品名稱', row.get('商品', '優惠商品'))), 
                         'price': int(row.get('價格', 0) or 0), 
                         'stock': int(row.get('初始庫存', 0) or 0) 
                     }
-                    if status.lower() == 'active':
-                        shops_db[name] = shop_data
-                    
-                    full_shops_db[name] = shop_data # 存儲所有商店的數據，用於管理頁面
-
         except Exception: shops_db = {}
-        
+
         # 2. 讀取訂單
         try:
             ws_orders = ss.worksheet("領取紀錄")
             orders = ws_orders.get_all_records()
         except Exception: orders = []
 
-        # 這裡返回的 SHOPS_DB 僅包含 Active 狀態的店家
         return shops_db, orders
     except Exception: 
         st.error("數據庫載入失敗，請檢查權限或 ID 是否正確。")
@@ -107,6 +99,32 @@ def delete_order(idx):
             st.error("操作失敗，無法刪除訂單。")
             return False
     return False
+
+# --- 啟用/停用店家功能 (關閉合作) ---
+def update_shop_status(shop_name, new_status):
+    client = get_client()
+    if not client:
+        st.error("更新失敗：無法連線至數據庫。")
+        return False
+    
+    try:
+        ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
+        cell = ws.find(shop_name, in_column=1) 
+        if cell is None:
+            st.error("更新失敗：數據庫中找不到該店名。")
+            return False
+        
+        # ⚠️ 假設 '狀態' 在第 9 欄 (I 欄)
+        ws.update_cell(cell.row, 9, new_status) 
+        
+        st.success(f"🚨 {shop_name} 的合作狀態已更新為 **{new_status}**。")
+        st.cache_data.clear() 
+        st.rerun()
+        return True
+
+    except Exception as e:
+        st.error(f"更新失敗：寫入數據庫時發生錯誤 ({e})。")
+        return False
 
 # --- 簡化後的店家新增函式 (只傳遞核心數據) ---
 def add_shop_to_sheet(data):
@@ -166,31 +184,6 @@ def get_shop_status(shop_name, shop_info, orders_df):
         'status_text': status_text,
     }
 
-# --- FIX: 店家專屬的狀態切換函式 ---
-def toggle_shop_status(shop_name, current_status):
-    client = get_client()
-    if not client:
-        st.error("更新失敗：無法連線至數據庫。")
-        return False
-    
-    new_status = "Inactive" if current_status == "Active" else "Active"
-    
-    try:
-        ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
-        cell = ws.find(shop_name, in_column=1) 
-        if cell is None:
-            st.error("更新失敗：數據庫中找不到該店名。")
-            return False
-        
-        # ⚠️ 假設 '狀態' 在第 9 欄 (I 欄)
-        ws.update_cell(cell.row, 9, new_status) 
-        
-        st.success(f"🏪 {shop_name} 狀態已更新為 **{new_status}**。")
-        st.cache_data.clear() 
-        st.rerun()
-    except Exception as e:
-        st.error(f"更新失敗：寫入數據庫時發生錯誤 ({e})。")
-
 
 # ==========================================
 # 3. 頁面開始
@@ -225,15 +218,6 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
         st.divider()
         st.link_button("📄 開啟數據庫", f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit", help="（僅供主管理員參考）")
         st.divider()
-        
-        # 獲取店家的當前狀態 (需要單獨從 Sheet 讀取，因為 SHOPS_DB 只有 Active 的)
-        current_status_display = "Active" 
-        
-        # --- FIX: 店家專屬開關店功能 ---
-        st.subheader("💡 營業狀態控制")
-        if st.button(f"切換至 {'Inactive' if current_status_display == 'Active' else 'Active'}", type="secondary"):
-             toggle_shop_status(shop_target, current_status_display) # 執行狀態切換
-        st.caption(f"當前狀態: **{current_status_display}** (請刷新查看)") # 提示店家刷新
 
         # --- 店家專屬庫存調整面板 ---
         st.subheader("📦 調整今日總庫存")
@@ -253,6 +237,7 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
                             ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
                             cell = ws.find(shop_target, in_column=1) 
                             if cell:
+                                # ⚠️ 初始庫存是 D 欄 (第 4 欄)
                                 ws.update_cell(cell.row, 4, new_stock) 
                                 st.success(f"📦 總庫存已更新為 {new_stock} 份。")
                                 st.cache_data.clear() 
@@ -340,9 +325,8 @@ else:
             if SHOPS_DB:
                 shop_to_manage = st.selectbox("選擇要管理的店家", list(SHOPS_DB.keys()), key="admin_manage_shop_select")
                 
-                # 這裡需要知道店家的當前狀態，但目前 SHOPS_DB 只有 Active 的。
-                # 為了避免複雜的二次讀取，這裡只提供更新按鈕，假設管理員知道當前狀態。
                 status_opts = ["Active", "Inactive"]
+                
                 new_status = st.selectbox("設定新狀態", status_opts, index=0, key="admin_manage_status") 
                 
                 if st.button("🔄 更新店家狀態", type="primary"):
@@ -386,7 +370,7 @@ else:
             
             # --- 管理員新增店家表單邏輯 ---
             st.subheader("➕ 新增店家")
-            st.caption("請務必確保 Google Sheet 欄位順序為：地區, 店名, 價格, 初始庫存, 商品名稱, 模式, 經度, 緯度, 狀態。")
+            st.caption("請確保 Google Sheet 欄位順序為：地區, 店名, 價格, 初始庫存, 商品名稱, 模式, 經度, 緯度, 狀態。")
             with st.form("add_shop_form"):
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -406,14 +390,14 @@ else:
                             key="new_region_select"
                         )
                     else:
+                        # 允許管理員手動輸入第一個地區
                         new_region = st.text_input(
                              "地區名稱*", 
                              key="new_region_manual", 
-                             value="請新增地區",
-                             help="請先在 Sheet 中新增地區資料"
+                             value="請在此輸入第一個地區名稱",
+                             help="請確保名稱標準化，例：新北市淡水區淡江大學"
                         )
-                        st.warning("無現有地區可選，請手動新增。")
-                    # --- END FIX ---
+                        st.warning("無現有地區可選，請輸入第一個地區名稱。")
 
 
                     new_stock = st.number_input("初始庫存", min_value=1, value=10)
@@ -424,20 +408,23 @@ else:
                 
                 # --- 呼叫 Streamlit 內建的寫入邏輯 ---
                 if submitted:
-                    cleaned_region_name = clean_region_name(new_region)
-                    # 修正：如果選擇的是 "請新增地區" 則不能提交
-                    if cleaned_region_name == "請新增地區" or not all([new_shop_name, cleaned_region_name]): 
-                        st.error("店名、地區不可為空！")
+                    # 檢查如果是手動輸入，則不能為空
+                    if 'new_region_manual' in st.session_state and st.session_state['new_region_manual'] == "請在此輸入第一個地區名稱":
+                         st.error("請輸入有效的地區名稱。")
                     else:
-                        # 執行寫入
-                        add_shop_to_sheet({
-                            "shop_name": new_shop_name,
-                            "region": cleaned_region_name, # 自由輸入的地區名
-                            "item": new_item,
-                            "price": new_price,
-                            "stock": new_stock,
-                            "mode": new_mode, # 固定為剩食
-                        })
+                        cleaned_region_name = clean_region_name(new_region)
+                        if not all([new_shop_name, cleaned_region_name]): 
+                            st.error("店名、地區不可為空！")
+                        else:
+                            # 執行寫入
+                            add_shop_to_sheet({
+                                "shop_name": new_shop_name,
+                                "region": cleaned_region_name, # 自由輸入的地區名
+                                "item": new_item,
+                                "price": new_price,
+                                "stock": new_stock,
+                                "mode": new_mode, # 固定為剩食
+                            })
             
             # 🚀 快速進入商家後台 
             st.divider()
@@ -495,7 +482,7 @@ else:
                     qr_img_url = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}"
                     
                     with qr_cols[i % 5]:
-                        st.markdown(f"**{name}**")
+                        st.markdown(f"**{name}** ({info['region'].split(' - ')[-1]})")
                         st.image(qr_img_url, caption=f"掃描進入看板", width=120)
                         st.caption(f"連結: [Link]({shop_link})")
                         st.write("---")
@@ -517,7 +504,7 @@ else:
     if max_price == min_price: max_price += 10
     
     
-    col_filter_1, col_filter_2, col_filter_3 = st.columns([1.5, 1.5, 3]) 
+    col_filter_1, col_filter_2 = st.columns([1, 1]) 
 
     # 獲取所有地區名稱 (單層)
     all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
@@ -566,13 +553,11 @@ else:
 
     
     if not final_filtered_shops:
-        with col_filter_3:
-            st.warning(f"🚨 警告：選定條件下找不到剩食。")
+        st.warning(f"🚨 警告：選定條件下找不到剩食。")
     
     
     # 顯示店家計數
-    with col_filter_3:
-        st.caption(f"目前顯示 {len(final_filtered_shops)} 個店家。")
+    st.caption(f"目前顯示 {len(final_filtered_shops)} 個店家。")
 
     st.divider()
 
