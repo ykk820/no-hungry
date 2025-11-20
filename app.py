@@ -20,6 +20,7 @@ if 'user_uuid' not in st.session_state:
 # ==========================================
 # 1. 系統全域設定 
 # ==========================================
+# FIX: 移除 GAS_URL，直接在 Streamlit 內處理 Geocoding 和寫入
 SPREADSHEET_ID = "1H69bfNsh0jf4SdRdiilUOsy7dH6S_cde4Dr_5Wii7Dw"
 BASE_APP_URL = "https://no-hungry.streamlit.app"
 
@@ -101,7 +102,7 @@ def delete_order(idx):
         except: return False
     return False
 
-# --- FIX: Nominatim Geocoding 服務函式 (無需 Key) ---
+# --- Nominatim Geocoding 服務函式 (無需 Key) ---
 @st.cache_data(ttl=3600) # 緩存定位結果一小時
 def geocode_with_nominatim(address):
     """使用 OpenStreetMap Nominatim 服務將地址轉換為經緯度"""
@@ -122,12 +123,11 @@ def geocode_with_nominatim(address):
         return None, None, f"定位 API 呼叫失敗: {str(e)}"
 
 
-# --- FIX: 重構 add_shop_to_sheet (直接在 Streamlit 內處理定位與寫入) ---
+# --- 重構 add_shop_to_sheet (直接在 Streamlit 內處理定位與寫入) ---
 def add_shop_to_sheet(data):
     
     # 1. 執行 Geocoding
     st.info(f"正在使用 OpenStreetMap 服務定位地址: {data['address']}...")
-    # FIX: 呼叫 Nominatim 定位函式
     lat, lon, message = geocode_with_nominatim(data['address'])
     
     if lat is None:
@@ -330,7 +330,7 @@ else:
                 
                 submitted = st.form_submit_button("✅ 新增並定位 (直接寫入 Sheet)")
                 
-                # --- FIX: 直接呼叫 Streamlit 內建的寫入邏輯 ---
+                # --- 呼叫 Streamlit 內建的寫入邏輯 ---
                 if submitted:
                     cleaned_region_name = clean_region_name(new_region)
                     if not all([new_shop_name, new_address, cleaned_region_name]):
@@ -452,7 +452,7 @@ else:
 
     st.divider()
 
-    # --- 顯示人潮多寡列表與連動選擇 ---
+    # --- 顯示人潮多寡列表與連動選擇 (FINAL SOLUTION: ST.BUTTON) ---
     
     st.subheader("📊 即時人潮狀態一覽 (點擊卡片選擇店家)")
     
@@ -474,68 +474,59 @@ else:
     else:
         cols = st.columns(cols_per_row)
         
-        # --- 使用 Form 確保點擊連動穩定性 (FINAL STRUCTURE) ---
-        with st.form("shop_list_form"):
-            
-            for i, shop in enumerate(shops_with_status):
-                name = shop['name']
-                info = shop['info']
-                status = shop['status']
-                
-                user_is_in_queue = False
-                my_queue_number = 0
-                if not ORDERS_DF.empty and 'user_id' in ORDERS_DF.columns and 'store' in ORDERS_DF.columns:
-                    my_queue = ORDERS_DF[(ORDERS_DF['user_id'] == st.session_state['user_uuid']) & (ORDERS_DF['store'] == name)]
-                    if not my_queue.empty:
-                        user_is_in_queue = True
-                        shop_orders = ORDERS_DF[ORDERS_DF['store'] == name]
-                        my_order_index = my_queue.index[0]
-                        my_queue_number = len(shop_orders[shop_orders.index <= my_order_index])
-
-
-                with cols[i % cols_per_row]:
-                    
-                    border_color = True
-                    if st.session_state['target_shop_select'] == name:
-                        border_color = "green" 
-
-                    # 1. 顯示卡片內容
-                    with st.container(border=border_color): 
-                        st.markdown(f"**🏪 {name}** ({info['region']})")
-                        st.markdown(f"**{status['status_text']}**")
-                        
-                        if status['is_queue_mode']:
-                            st.caption(f"模式：餐期排隊 | 叫號依據：**{info['item']}**")
-                        elif status['is_available']:
-                            st.caption(f"模式：剩食 | 價格：**${info['price']}**")
-
-                        if user_is_in_queue:
-                            st.success(f"🎉 **您排在 {my_queue_number} 號！**")
-                            
-                    # 2. 顯示按鈕 (位於 with cols 內，但與 container 平行)
-                    if status['is_available']:
-                        if st.form_submit_button(
-                            f"選擇 {name} 進行下單", 
-                            type="primary" if st.session_state['target_shop_select'] != name else "secondary",
-                            use_container_width=True,
-                            key=f"select_btn_{name}" 
-                        ):
-                            st.session_state['target_shop_select'] = name
-                            
-                    else:
-                        st.button("休息中 / 已售完", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
-            
-        shop_selected_by_click = False
-        for shop in shops_with_status:
+        # --- FIX: 移除 Form，使用 st.button + st.rerun 實現連動 ---
+        # 由於 st.form_submit_button 無法穩定運行，我們現在完全使用 st.button
+        
+        for i, shop in enumerate(shops_with_status):
             name = shop['name']
-            if st.session_state.get(f"select_btn_{name}"):
-                st.session_state[f"select_btn_{name}"] = False 
-                shop_selected_by_click = True
-                break
-                
-        if shop_selected_by_click:
-            st.rerun()
+            info = shop['info']
+            status = shop['status']
+            
+            user_is_in_queue = False
+            my_queue_number = 0
+            if not ORDERS_DF.empty and 'user_id' in ORDERS_DF.columns and 'store' in ORDERS_DF.columns:
+                my_queue = ORDERS_DF[(ORDERS_DF['user_id'] == st.session_state['user_uuid']) & (ORDERS_DF['store'] == name)]
+                if not my_queue.empty:
+                    user_is_in_queue = True
+                    shop_orders = ORDERS_DF[ORDERS_DF['store'] == name]
+                    my_order_index = my_queue.index[0]
+                    my_queue_number = len(shop_orders[shop_orders.index <= my_order_index])
 
+
+            with cols[i % cols_per_row]:
+                
+                border_color = True
+                if st.session_state['target_shop_select'] == name:
+                    border_color = "green" 
+
+                # 1. 顯示卡片內容
+                with st.container(border=border_color): 
+                    st.markdown(f"**🏪 {name}** ({info['region']})")
+                    st.markdown(f"**{status['status_text']}**")
+                    
+                    if status['is_queue_mode']:
+                        st.caption(f"模式：餐期排隊 | 叫號依據：**{info['item']}**")
+                    elif status['is_available']:
+                        st.caption(f"模式：剩食 | 價格：**${info['price']}**")
+
+                    if user_is_in_queue:
+                        st.success(f"🎉 **您排在 {my_queue_number} 號！**")
+                        
+                # 2. 顯示按鈕 (使用普通的 st.button)
+                if status['is_available']:
+                    # 使用 lambda 函式來定義點擊行為 (設置 session state 並強制 rerun)
+                    if st.button(
+                        f"選擇 {name} 進行下單", 
+                        type="primary" if st.session_state['target_shop_select'] != name else "secondary",
+                        use_container_width=True,
+                        key=f"select_btn_{name}" 
+                    ):
+                        st.session_state['target_shop_select'] = name
+                        st.rerun() # 立即重新執行，實現連動
+                        
+                else:
+                    st.button("休息中 / 已售完", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
+            
     # --- 4. 詳細下單/排隊區塊 ---
     
     st.divider()
