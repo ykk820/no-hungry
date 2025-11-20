@@ -35,7 +35,6 @@ SUGGESTED_REGIONS_FULL = [
     '新北市淡水區 - 淡海新市鎮',
     '新北市淡水區 - 紅樹林/竹圍',
 ]
-# --- 淡江區域篩選關鍵字 (固定為此區域) ---
 TAMKANG_PREFIX = '新北市淡水區'
 
 # ==========================================
@@ -107,6 +106,35 @@ def delete_order(idx):
             st.error("操作失敗，無法刪除訂單。")
             return False
     return False
+
+# --- FIX: 更新店家庫存 (用於專屬後台) ---
+def update_shop_stock(shop_name, new_stock_value):
+    client = get_client()
+    if not client:
+        st.error("更新失敗：無法連線至數據庫。")
+        return False
+    
+    try:
+        ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
+        
+        # 尋找目標店名在哪一行 (從第二行開始找，排除標題)
+        cell = ws.find(shop_name, in_column=1) 
+        if cell is None:
+            st.error("更新失敗：數據庫中找不到該店名。")
+            return False
+        
+        # 庫存欄位是第 8 欄 ('初始庫存'，A=1, B=2, ..., H=8)
+        ws.update_cell(cell.row, 8, new_stock_value) 
+        
+        st.success(f"📦 {shop_name} 的總庫存已更新為 {new_stock_value} 份。")
+        st.cache_data.clear() # 清除快取
+        st.rerun()
+        return True
+
+    except Exception as e:
+        st.error(f"更新失敗：寫入數據庫時發生錯誤 ({e})。")
+        return False
+
 
 # --- 簡化後的店家新增函式 (移除 Lat/Lon 參數) ---
 def add_shop_to_sheet(data):
@@ -204,8 +232,25 @@ if current_mode == "shop" and shop_target in SHOPS_DB:
             st.rerun() 
             
         st.divider()
-        st.link_button("📄 開啟數據庫", f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit", help="直接編輯 Google Sheet 數據庫")
+        st.link_button("📄 開啟數據庫", f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit", help="（僅供主管理員參考）")
         st.divider()
+        
+        # --- FIX: 店家專屬庫存調整面板 ---
+        st.subheader("📦 調整今日總庫存")
+        with st.form("stock_update_form"):
+            current_stock_value = shop_info.get('stock', 0)
+            new_stock = st.number_input(
+                "設定新的總庫存數量", 
+                min_value=0, 
+                value=current_stock_value,
+                key="new_stock_input"
+            )
+            if st.form_submit_button("💾 確認更新庫存"):
+                if new_stock != current_stock_value:
+                    update_shop_stock(shop_target, new_stock)
+                else:
+                    st.warning("庫存數量未改變。")
+        # --- FIX END ---
 
     st.title(f"📊 實時剩食看板 - {shop_target}")
     
@@ -278,8 +323,6 @@ else:
         
         # --- 管理員新增店家表單邏輯 (只有登入後才顯示) ---
         if is_admin:
-            # 從 SUGGESTED_REGIONS_FULL 提取行政區和社區名
-            unique_main_regions = sorted(list(set([r.split(' - ')[0].strip() for r in SUGGESTED_REGIONS_FULL])))
             
             st.subheader("➕ 新增店家")
             st.caption("經緯度將設為 0, 0。")
@@ -291,22 +334,13 @@ else:
                     new_price = st.number_input("價格*", min_value=1, value=50) # 價格輸入
                 with col_b:
                     
-                    # --- 雙層地區選擇輸入 (強制行政區為 TAMKANG_PREFIX) ---
-                    st.caption(f"地區：{TAMKANG_PREFIX}") # 顯示固定的行政區
-                    main_region = TAMKANG_PREFIX # 固定行政區
-                    
-                    # 過濾出所有淡水區的社區名
-                    tamkang_sub_regions = [r.split(' - ')[1].strip() for r in SUGGESTED_REGIONS_FULL if r.startswith(TAMKANG_PREFIX)]
-
-                    sub_region = st.selectbox(
-                        "選擇社區/次分區*", 
-                        tamkang_sub_regions,
-                        key="new_sub_region_manual"
+                    # --- FIX: 單一自由文字輸入地區名稱 ---
+                    new_region = st.text_input(
+                        "地區名稱*", 
+                        key="new_region_manual", 
+                        value="", 
+                        help="例如：新北市淡水區淡江大學 / 台北市信義區市政府"
                     )
-
-                    # 將兩級地區合併為單一字串
-                    new_region = f"{main_region} - {sub_region}" 
-                    # ---------------------------
 
                     new_stock = st.number_input("初始庫存", min_value=1, value=10)
                 
@@ -318,7 +352,7 @@ else:
                 if submitted:
                     cleaned_region_name = clean_region_name(new_region)
                     if not all([new_shop_name, cleaned_region_name]): # 檢查必要的欄位
-                        st.error("店名、區域不可為空！")
+                        st.error("店名、地區不可為空！")
                     else:
                         # 執行寫入
                         add_shop_to_sheet({
@@ -344,15 +378,23 @@ else:
                  st.info("目前數據庫中沒有任何店家數據。")
                 
             st.divider()
-            st.subheader("📱 產生 QR Code")
+            st.subheader("📱 批量二維碼")
+            
+            # 顯示所有店家的二維碼
             if SHOPS_DB:
-                qr_shop = st.selectbox("選擇店家 (QR Code)", list(SHOPS_DB.keys()))
-                if qr_shop: 
-                    shop_link = f"{BASE_APP_URL}/?mode=shop&name={urllib.parse.quote(str(qr_shop))}" 
-                    st.image(f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}")
-                    st.code(shop_link)
-                else:
-                    st.caption("無法生成 QR Code：店家名稱為空。")
+                
+                st.subheader("所有店家二維碼連結")
+                qr_cols = st.columns(5) # 創建列來顯示二維碼
+
+                for i, (name, info) in enumerate(SHOPS_DB.items()):
+                    shop_link = f"{BASE_APP_URL}/?mode=shop&name={urllib.parse.quote(str(name))}"
+                    qr_img_url = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(shop_link)}"
+                    
+                    with qr_cols[i % 5]:
+                        st.markdown(f"**{name}** ({info['region'].split(' - ')[-1]})")
+                        st.image(qr_img_url, caption=f"掃描進入看板", width=120)
+                        st.caption(f"連結: [Link]({shop_link})")
+                        st.write("---") # 分隔線
             else:
                 st.caption("請先在數據庫中新增店家資料。")
 
@@ -362,42 +404,35 @@ else:
 
 
     # --- 主畫面 (Consumer Logic) ---
-    st.title("🍱 友善食光剩食清單 (淡水區)") 
+    st.title("🍱 友善食光剩食清單") 
     st.info(f"您的專屬ID：{st.session_state['user_uuid'][:8]}... | 此ID用於預防惡意領取。")
     
     if not SHOPS_DB:
         st.warning("⚠️ 數據庫正在載入中或無法連線，請稍後重試。")
         st.stop()
 
-    # --- 篩選器 (簡化為兩層，聚焦淡水區域) ---
+    # --- 篩選器 (單層地區篩選 + 預算) ---
     
     # 獲取所有店家的價格範圍
     all_prices = [v['price'] for v in SHOPS_DB.values() if isinstance(v['price'], int)]
     min_price = int(np.min(all_prices)) if all_prices else 0
     max_price = int(np.max(all_prices)) if all_prices else 100
-    if max_price == min_price: max_price += 10 
+    if max_price == min_price: max_price += 10
     
     
     col_filter_1, col_filter_2, col_filter_3 = st.columns([1.5, 1.5, 3]) 
 
-    # 1. 預先篩選出所有淡水相關的完整地區名稱
+    # 獲取所有地區名稱 (單層)
     all_regions = sorted(list(set([v['region'] for v in SHOPS_DB.values()])))
-    tamkang_regions = [r for r in all_regions if r.startswith(TAMKANG_PREFIX)]
-
-    # 從淡水區的完整地區名稱中提取社區名稱
-    unique_sub_regions = ["所有社區"]
-    if tamkang_regions:
-        sub_regions_raw = [r.split(' - ')[1].strip() for r in tamkang_regions if ' - ' in r]
-        unique_sub_regions = ["所有社區"] + sorted(list(set(sub_regions_raw)))
     
     
     with col_filter_1:
-        # Level 1: 社區/次分區篩選
-        selected_sub_region = st.selectbox(
-            "🏘️ 社區/次分區", 
-            unique_sub_regions,
+        # Level 1: 單層地區篩選
+        selected_region = st.selectbox(
+            "📍 選擇地區", 
+            ["所有地區"] + all_regions,
             index=0,
-            key="sub_region_selectbox",
+            key="region_selectbox",
             on_change=lambda: st.session_state.update(
                 target_shop_select=None 
             )
@@ -417,14 +452,14 @@ else:
 
     # --- 執行最終篩選邏輯 ---
     
-    # 1. 執行地區篩選 (固定篩選淡水區內的社區)
-    temp_shops = {k: v for k, v in SHOPS_DB.items() if v['region'].startswith(TAMKANG_PREFIX)}
-        
-    sub_filter_key = clean_region_name(selected_sub_region)
-        
-    if sub_filter_key != "所有社區":
-        full_filter_string = f"{TAMKANG_PREFIX} - {sub_filter_key}"
-        temp_shops = {k: v for k, v in temp_shops.items() if v['region'] == full_filter_string}
+    # 1. 執行地區篩選 (單層)
+    selected_filter_key = clean_region_name(selected_region)
+    
+    if selected_filter_key == "所有地區":
+        temp_shops = SHOPS_DB
+    else:
+        # 由於地區名稱是自由輸入的，必須使用精確匹配
+        temp_shops = {k: v for k, v in SHOPS_DB.items() if v['region'] == selected_filter_key}
 
     # 2. 執行價格篩選
     min_b, max_b = budget_range
@@ -445,7 +480,7 @@ else:
 
     st.divider()
 
-    # --- 顯示人潮多寡列表與連動選擇 (ST.BUTTON) ---
+    # --- 顯示剩食清單 (ST.BUTTON) ---
     
     st.subheader("📊 即時剩食清單 (點擊卡片領取)")
     
@@ -463,7 +498,7 @@ else:
     # 顯示列表
     cols_per_row = 3
     if len(shops_with_status) == 0:
-        st.info(f"在選定的社區和預算範圍內沒有找到任何剩食項目。")
+        st.info(f"在選定的地區和預算範圍內沒有找到任何剩食項目。")
     else:
         cols = st.columns(cols_per_row)
         
@@ -473,7 +508,6 @@ else:
             status = shop['status']
             
             user_is_in_queue = False
-            my_queue_number = 0
             if not ORDERS_DF.empty and 'user_id' in ORDERS_DF.columns and 'store' in ORDERS_DF.columns:
                 my_queue = ORDERS_DF[(ORDERS_DF['user_id'] == st.session_state['user_uuid']) & (ORDERS_DF['store'] == name)]
                 if not my_queue.empty:
@@ -509,7 +543,7 @@ else:
                 else:
                     st.button("❌ 已領取完畢", key=f"unavailable_btn_{name}", disabled=True, use_container_width=True)
             
-    # --- 4. 詳細下單/排隊區塊 ---
+    # --- 4. 詳細領取區塊 ---
     
     st.divider()
     
@@ -525,7 +559,7 @@ else:
             
             u_name = st.text_input("輸入您的暱稱 (作為取餐依據)", key="u_name_detail")
             
-            btn_txt = "🚀 確認領取 (剩食)"
+            btn_txt = "🚀 確認領取"
             
             user_has_order = False
             if not ORDERS_DF.empty:
@@ -561,7 +595,7 @@ else:
                             else:
                                 st.error("操作失敗，請檢查權限設定。")
 
-                        except Exception as e: 
+                        except Exception: 
                             st.error(f"連線失敗，請檢查網路或系統狀態。")
                 else: st.warning("請輸入名字")
 
