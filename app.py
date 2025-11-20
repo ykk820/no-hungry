@@ -474,7 +474,7 @@ else:
     else:
         cols = st.columns(cols_per_row)
         
-        # --- 使用 Form 確保點擊連動穩定性 ---
+        # --- 使用 Form 確保點擊連動穩定性 (FINAL STRUCTURE) ---
         with st.form("shop_list_form"):
             
             for i, shop in enumerate(shops_with_status):
@@ -512,7 +512,7 @@ else:
                         if user_is_in_queue:
                             st.success(f"🎉 **您排在 {my_queue_number} 號！**")
                             
-                    # 2. 顯示按鈕 (位於 with cols 內，確保在 st.form 作用域內)
+                    # 2. 顯示按鈕 (位於 with cols 內，但與 container 平行)
                     if status['is_available']:
                         if st.form_submit_button(
                             f"選擇 {name} 進行下單", 
