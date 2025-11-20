@@ -100,6 +100,33 @@ def delete_order(idx):
             return False
     return False
 
+# --- 啟用/停用店家功能 (關閉合作) ---
+def update_shop_status(shop_name, new_status):
+    client = get_client()
+    if not client:
+        st.error("更新失敗：無法連線至數據庫。")
+        return False
+    
+    try:
+        ws = client.open_by_key(SPREADSHEET_ID).worksheet("店家設定")
+        # 尋找目標店名在哪一行 (第 1 欄)
+        cell = ws.find(shop_name, in_column=1) 
+        if cell is None:
+            st.error("更新失敗：數據庫中找不到該店名。")
+            return False
+        
+        # ⚠️ 假設 '狀態' 在第 9 欄 (I 欄)
+        ws.update_cell(cell.row, 9, new_status) 
+        
+        st.success(f"🚨 {shop_name} 的合作狀態已更新為 **{new_status}**。")
+        st.cache_data.clear() 
+        st.rerun()
+        return True
+
+    except Exception as e:
+        st.error(f"更新失敗：寫入數據庫時發生錯誤 ({e})。")
+        return False
+
 # --- 簡化後的店家新增函式 (只傳遞核心數據) ---
 def add_shop_to_sheet(data):
     
@@ -108,7 +135,7 @@ def add_shop_to_sheet(data):
         st.error("店家新增失敗。無法連線至數據庫。")
         return False
 
-    # 準備寫入資料 (順序必須嚴格匹配 Sheet 標題行)
+    # 準備寫入資料 (順序必須嚴格匹配 Sheet 標題行: A:地區, B:店名, C:價格, D:初始庫存, E:商品名稱, F:模式, G:經度, H:緯度, I:狀態)
     new_row_final = [
         data['region'],      # 1. 地區 (A)
         data['shop_name'],   # 2. 店名 (B)
@@ -344,7 +371,7 @@ else:
             
             # --- 管理員新增店家表單邏輯 ---
             st.subheader("➕ 新增店家")
-            st.caption("請確保 Google Sheet 欄位順序為：地區, 店名, 價格, 初始庫存, 商品名稱, 模式, 經度, 緯度, 狀態。")
+            st.caption("請務必確保 Google Sheet 欄位順序為：地區, 店名, 價格, 初始庫存, 商品名稱, 模式, 經度, 緯度, 狀態。")
             with st.form("add_shop_form"):
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -376,11 +403,11 @@ else:
                         # 執行寫入
                         add_shop_to_sheet({
                             "shop_name": new_shop_name,
-                            "region": cleaned_region_name, # 自由輸入的地區名
+                            "region": cleaned_region_name, 
                             "item": new_item,
                             "price": new_price,
                             "stock": new_stock,
-                            "mode": new_mode, # 固定為剩食
+                            "mode": new_mode, 
                         })
             
             # 🚀 快速進入商家後台 
@@ -480,7 +507,7 @@ else:
         )
         
     with col_filter_2:
-        # 預算區間篩選 (FIX: 預設值 50-100)
+        # 預算區間篩選
         budget_range = st.slider(
             "💲 預算區間",
             min_value=min_price,
